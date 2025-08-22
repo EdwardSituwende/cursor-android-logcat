@@ -1,0 +1,74 @@
+{
+  "name": "cursor-android-logcat",
+  "displayName": "Android Logcat (Cursor)",
+  "description": "Minimal Android Logcat panel integrated with your cli_logcat.sh",
+  "version": "0.0.1",
+  "publisher": "edward-local",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:android-logcat-view",
+    "onCommand:cursorAndroidLogcat.start",
+    "onCommand:cursorAndroidLogcat.stop",
+    "onCommand:cursorAndroidLogcat.refreshDevices"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "android-logcat-panel",
+          "title": "android logcat",
+          "icon": "media/android.svg"
+        }
+      ]
+    },
+    "views": {
+      "android-logcat-panel": [
+        {
+          "type": "webview",
+          "id": "android-logcat-view",
+          "name": "Android Logcat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "cursorAndroidLogcat.start",
+        "title": "Android Logcat: Start"
+      },
+      {
+        "command": "cursorAndroidLogcat.stop",
+        "title": "Android Logcat: Stop"
+      },
+      {
+        "command": "cursorAndroidLogcat.refreshDevices",
+        "title": "Android Logcat: Refresh Devices"
+      }
+    ],
+    "configuration": {
+      "title": "Android Logcat (Cursor)",
+      "properties": {
+        "cursorAndroidLogcat.scriptPath": {
+          "type": "string",
+          "default": "/Users/edward/PythonProjects/AutoWorkFLow/logcat_android/cli_logcat.sh",
+          "description": "Absolute path to cli_logcat.sh"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.123",
+    "@types/vscode": "^1.103.0",
+    "typescript": "^5.9.2"
+  }
+}

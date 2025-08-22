@@ -1,0 +1,14 @@
+.git/
+.vscode/
+node_modules/
+out/test/**
+coverage/**
+src/**
+**/*.map
+**/*.tsbuildinfo
+**/logs/**
+*.log
+.DS_Store
+.idea/
+.history/
+.nyc_output/**

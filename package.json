@@ -2,10 +2,10 @@
   "name": "cursor-android-logcat",
   "displayName": "Android Logcat (Cursor)",
   "description": "Minimal Android Logcat panel integrated with your cli_logcat.sh",
-  "version": "0.0.1",
+  "version": "1.0.1",
   "publisher": "edward-local",
   "engines": {
-    "vscode": "^1.92.0"
+    "vscode": "^1.99.0"
   },
   "categories": [
     "Other"
@@ -68,7 +68,7 @@
   },
   "devDependencies": {
     "@types/node": "^18.19.123",
-    "@types/vscode": "^1.103.0",
+    "@types/vscode": "^1.99.0",
     "typescript": "^5.9.2"
   }
 }

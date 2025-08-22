@@ -24,7 +24,7 @@ flowchart TB
   V -.-> H
   V -.-> C
   V -.-> J
-  E -->|spawn + env(DISABLE_SCRIPT=1)| S
+  E -->|spawn + env DISABLE_SCRIPT=1| S
   S -->|stdout/stderr| E -->|append| V
 ```
 

@@ -1,10 +1,10 @@
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body { font-family: var(--vscode-font-family); padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 label { font-size: 12px; }
 select, input { height: 24px; }
 button { height: 26px; }
-#log { white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid var(--vscode-panel-border); flex: 1; overflow: auto; }
+#log { white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; }
 #status { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0 0 4px 0; font-family: var(--vscode-editor-font-family, monospace); }
 

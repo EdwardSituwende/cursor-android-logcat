@@ -69,8 +69,10 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
 
   private getScriptPath(): string {
     const cfg = vscode.workspace.getConfiguration('cursorAndroidLogcat');
-    const p = cfg.get<string>('scriptPath') || '/Users/edward/PythonProjects/AutoWorkFLow/logcat_android/cli_logcat.sh';
-    return p;
+    const configured = cfg.get<string>('scriptPath');
+    if (configured && configured.trim()) return configured;
+    // 默认指向扩展内置脚本
+    return path.join(this.context.extensionUri.fsPath, 'scripts', 'logcat_android', 'cli_logcat.sh');
   }
 
   private startProcess(opts: { serial: string; pkg: string; tag: string; level: string; buffer: string; save?: boolean }) {

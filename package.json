@@ -55,7 +55,7 @@
       "properties": {
         "cursorAndroidLogcat.scriptPath": {
           "type": "string",
-          "default": "/Users/edward/PythonProjects/AutoWorkFLow/logcat_android/cli_logcat.sh",
+          "default": "",
           "description": "Absolute path to cli_logcat.sh"
         }
       }

@@ -3,8 +3,11 @@ body { font-family: var(--vscode-font-family); padding: 8px; display: flex; flex
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 label { font-size: 12px; }
-select, input { height: 24px; }
-button { height: 26px; }
+.row input:not([type="checkbox"]), .row select { height: 25px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, #2a2a2a); border-radius: 6px; padding: 0 8px; }
+.row input:not([type="checkbox"]):focus, .row select:focus { outline: none; border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 1px var(--vscode-focusBorder) inset; }
+.row input:not([type="checkbox"])::placeholder { color: var(--vscode-input-placeholderForeground); }
+.row select { padding-right: 25px; }
+button { height: 25px; }
 #log { white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; }
 #status { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0 0 4px 0; font-family: var(--vscode-editor-font-family, monospace); }
 

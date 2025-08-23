@@ -2,7 +2,6 @@ const vscode = acquireVsCodeApi();
 const $ = (id) => document.getElementById(id);
 
 const deviceSel = $('device');
-const refreshBtn = $('refresh');
 const startBtn = $('start');
 const stopBtn = $('stop');
 const logEl = $('log');
@@ -36,8 +35,11 @@ window.addEventListener('message', (e) => {
   }
 });
 
-refreshBtn.addEventListener('click', () => {
-  vscode.postMessage({ type: 'refreshDevices' });
+// 点击设备下拉框时，如果只有“未检测到设备”，则触发刷新
+deviceSel.addEventListener('click', () => {
+  if (deviceSel.options.length === 1 && deviceSel.options[0].value === '') {
+    vscode.postMessage({ type: 'refreshDevices' });
+  }
 });
 startBtn.addEventListener('click', () => {
   vscode.postMessage({

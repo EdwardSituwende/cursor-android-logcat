@@ -137,7 +137,9 @@ if [[ "$BUFFER" != "all" ]]; then
 else
   LC+=( -b main -b system -b events -b radio -b crash )
 fi
-[[ -n "$PID" ]] && LC+=( --pid="$PID" )
+if [[ -n "$PID" ]]; then
+  LC+=( --pid="$PID" )
+fi
 
 if [[ "$TAG" != "*" ]]; then
   IFS=',' read -r -a __tag_arr <<< "$TAG"
@@ -275,16 +277,25 @@ if [[ -n "$DURATION" ]]; then
   WATCHDOG_PID=$!
 fi
 
+PIPELINE="run_with_color | filter_lines | inject_process_name_all"
+
+# 若仅提供 PACKAGE 而未指定 PID，则动态按包名过滤（可自动跟随重启变化的 PID）
+if [[ -z "$PID" && -n "$PACKAGE" ]]; then
+  export FILTER_PACKAGE="$PACKAGE"
+  PIPELINE+=" | filter_by_package_dynamic"
+  TAGS_SUMMARY="$TAGS_SUMMARY (pkg-dynamic)"
+fi
+
 if $SAVE; then
   if $RAW_FILE; then
-    run_with_color | filter_lines | inject_process_name_all | tee -a "$RAW_PATH" | strip_ansi >> "$TXT_PATH"
+    eval "$PIPELINE" | tee -a "$RAW_PATH" | strip_ansi >> "$TXT_PATH"
     echo "已保存：$RAW_PATH（彩色），$TXT_PATH（去色）"
   else
-    run_with_color | filter_lines | inject_process_name_all | strip_ansi >> "$TXT_PATH"
+    eval "$PIPELINE" | strip_ansi >> "$TXT_PATH"
     echo "已保存：$TXT_PATH（去色）"
   fi
 else
-  run_with_color | filter_lines | inject_process_name_all
+  eval "$PIPELINE"
 fi
 
 

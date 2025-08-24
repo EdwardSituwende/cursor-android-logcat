@@ -2,8 +2,12 @@
   "name": "cursor-android-logcat",
   "displayName": "Android Logcat (Cursor)",
   "description": "Minimal Android Logcat panel integrated with your cli_logcat.sh",
-  "version": "1.0.1",
+  "version": "1.0.7",
   "publisher": "edward-local",
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/edward-local/cursor-android-logcat.git"
+  },
   "engines": {
     "vscode": "^1.99.0"
   },
@@ -64,7 +68,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "node ./scripts/bump-version-and-prepare.mjs && nohup node ./scripts/move-vsix-once.mjs >/dev/null 2>&1 & npm run compile",
+    "package": "npm run compile && npx --yes @vscode/vsce package && node ./scripts/move-vsix-once.mjs"
   },
   "devDependencies": {
     "@types/node": "^18.19.123",

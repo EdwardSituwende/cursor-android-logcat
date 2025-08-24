@@ -86,19 +86,19 @@
 ### 运行时架构（模块与数据流）
 ```mermaid
 graph TD
-  A[cli_logcat.sh 主程序] --> U[lib/usage.sh\nusage() 帮助输出]
-  A --> D[lib/device.sh\n设备自动/交互选择]
-  A --> R[lib/runner.sh\nrun_with_color 保持颜色]
-  A --> F[lib/filters.sh\nfilter_lines/strip_ansi\nfilter_by_package_dynamic]
-  A --> P[lib/pidmap.sh\nPID 映射刷新与注入]
+  A["cli_logcat.sh 主程序"] --> U["lib/usage.sh<br/>usage() 帮助输出"]
+  A --> D["lib/device.sh<br/>设备自动/交互选择"]
+  A --> R["lib/runner.sh<br/>run_with_color 保持颜色"]
+  A --> F["lib/filters.sh<br/>filter_lines / strip_ansi<br/>filter_by_package_dynamic"]
+  A --> P["lib/pidmap.sh<br/>PID 映射刷新与注入"]
 
   subgraph 运行时管线
-    R --> FL[filter_lines\n包含/排除正则]
-    FL --> IPN[inject_process_name_all\n进程名注入]
-    IPN -->|可选: 指定 package 且未显式 pid| FP[filter_by_package_dynamic\n按包名动态过滤]
+    R --> FL["filter_lines<br/>包含/排除正则"]
+    FL --> IPN["inject_process_name_all<br/>进程名注入"]
+    IPN -->|可选: 指定 package 且未显式 pid| FP["filter_by_package_dynamic<br/>按包名动态过滤"]
   end
 
-  A --> O[(logs/*.log, logs/*.raw)\n保存与配置摘要]
+  A --> O["logs/*.log 和 logs/*.raw<br/>保存与配置摘要"]
 ```
 
 ### 启动到退出的时序
@@ -138,9 +138,9 @@ sequenceDiagram
 ### 功能结构图
 ```mermaid
 graph TB
-  Core[核心 CLI 入口\ncli_logcat.sh]
+  Core["核心 CLI 入口<br/>cli_logcat.sh"]
   subgraph 输入与解析
-    Args[参数解析与校验\nserial/package/pid/tag/level/buffer/format]
+    Args["参数解析与校验<br/>serial / package / pid / tag / level / buffer / format"]
   end
   subgraph 设备与应用控制
     DevSel[设备选择]
@@ -148,15 +148,15 @@ graph TB
     Clear[logcat -c]
   end
   subgraph 采集与处理
-    Run[run_with_color 执行 logcat]
-    Grep[filter_lines 包含/排除]
-    Inject[inject_process_name_all 注入包名]
-    PkgDyn[filter_by_package_dynamic 动态包过滤]
+    Run["run_with_color 执行 logcat"]
+    Grep["filter_lines 包含/排除"]
+    Inject["inject_process_name_all 注入包名"]
+    PkgDyn["filter_by_package_dynamic 动态包过滤"]
   end
   subgraph 输出与生命周期
-    Save[保存 .log / .raw + 配置摘要]
-    Dur[duration 看门狗]
-    Cleanup[trap/cleanup 收尾]
+    Save["保存 .log / .raw + 配置摘要"]
+    Dur["duration 看门狗"]
+    Cleanup["trap/cleanup 收尾"]
   end
 
   Core --> Args

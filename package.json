@@ -36,7 +36,8 @@
         {
           "type": "webview",
           "id": "android-logcat-view",
-          "name": "Android Logcat"
+          "name": "Android Logcat",
+          "retainContextWhenHidden": true
         }
       ]
     },

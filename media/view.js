@@ -2,8 +2,7 @@ const vscode = acquireVsCodeApi();
 const $ = (id) => document.getElementById(id);
 
 const deviceSel = $('device');
-const startBtn = $('start');
-const stopBtn = $('stop');
+const toggleBtn = $('toggle');
 const logEl = $('log');
 const statusEl = $('status');
 
@@ -41,18 +40,28 @@ deviceSel.addEventListener('click', () => {
     vscode.postMessage({ type: 'refreshDevices' });
   }
 });
-startBtn.addEventListener('click', () => {
-  vscode.postMessage({
-    type: 'start',
-    serial: deviceSel.value,
-    pkg: $('pkg').value.trim(),
-    tag: $('tag').value.trim(),
-    level: $('level').value,
-    buffer: $('buffer').value,
-    save: document.getElementById('save').checked,
-  });
+let uiPaused = false; // 仅用于按钮文字切换
+toggleBtn.addEventListener('click', () => {
+  if (uiPaused) {
+    // 恢复
+    vscode.postMessage({
+      type: 'start',
+      serial: deviceSel.value,
+      pkg: $('pkg').value.trim(),
+      tag: $('tag').value.trim(),
+      level: $('level').value,
+      buffer: $('buffer').value,
+      save: document.getElementById('save').checked,
+    });
+    toggleBtn.textContent = '暂停';
+    uiPaused = false;
+  } else {
+    // 暂停
+    vscode.postMessage({ type: 'pause' });
+    toggleBtn.textContent = '恢复';
+    uiPaused = true;
+  }
 });
-stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'stop' }));
 
 vscode.postMessage({ type: 'ready' });
 

@@ -5,13 +5,12 @@
   <meta http-equiv="Content-Security-Policy" content="{{CSP}}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Android Logcat</title>
-  <style>{{STYLE}}</style>
+  <style>/*INJECT_STYLE*/</style>
 </head>
 <body>
   <div class="row">
     <select id="device"></select>
-    <button id="start">开始</button>
-    <button id="stop">停止</button>
+    <button id="toggle">暂停</button>
     <label style="display:flex;align-items:center;gap:4px;">
       <input id="save" type="checkbox" /> 保存到文件
     </label>

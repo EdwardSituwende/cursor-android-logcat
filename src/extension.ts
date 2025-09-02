@@ -8,23 +8,34 @@ type DeviceInfo = { serial: string; model?: string };
 
 class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'android-logcat-view';
+  private static readonly LAST_KEY = 'lastConfig.v1';
 
   private view?: vscode.WebviewView;
   private currentProc: ChildProcessWithoutNullStreams | null = null;
   private isRunning = false;
+  private bufferedWhileHidden = "";
+  private isRefreshingDevices = false;
+  private isPaused = false;
+  private pausedBuffer = "";
+  private hasAutoStarted = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this.view = webviewView;
-    webviewView.webview.options = { enableScripts: true };
+    // 保持 Webview 在隐藏时不被销毁，切换 Tab 后无需重新加载
+    webviewView.webview.options = { enableScripts: true, retainContextWhenHidden: true } as any;
     webviewView.webview.html = this.getHtml();
 
-    // 切换 Tab 或面板时，视图重新可见则刷新设备列表
+    // 切换 Tab 或面板时：仅在恢复可见时一次性冲刷隐藏期间积累的日志，避免逐条回放造成的可见延迟
     webviewView.onDidChangeVisibility(async () => {
       if (webviewView.visible) {
-        const devices = await this.listDevices();
-        this.post({ type: 'devices', devices });
+        if (this.bufferedWhileHidden.length > 0) {
+          this.post({ type: 'append', text: this.bufferedWhileHidden });
+          this.bufferedWhileHidden = "";
+        }
+        // 设备列表刷新：放在微任务后异步执行，不阻塞 UI 首帧
+        queueMicrotask(() => this.refreshDevicesAsync());
       }
     });
 
@@ -35,40 +46,120 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case 'ready': {
-          const devices = await this.listDevices();
-          this.post({ type: 'devices', devices });
+          this.refreshDevicesAsync();
+          this.postLastConfigToWebview();
+          this.autoStartIfPossible();
           break;
         }
         case 'refreshDevices': {
-          const devices = await this.listDevices();
-          this.post({ type: 'devices', devices });
+          this.refreshDevicesAsync();
           break;
         }
         case 'start': {
-          if (this.isRunning) {
+          // 恢复：若未运行则启动，若处于暂停则恢复输出
+          if (!this.isRunning) {
+            if (!msg.serial) {
+              this.post({ type: 'status', text: '请先选择设备' });
+              return;
+            }
+            this.startProcess({
+              serial: msg.serial,
+              pkg: msg.pkg || '',
+              tag: msg.tag || '*',
+              level: msg.level || 'D',
+              buffer: msg.buffer || 'main',
+              save: !!msg.save,
+            });
+            this.setLastConfig({
+              serial: msg.serial,
+              pkg: msg.pkg || '',
+              tag: msg.tag || '*',
+              level: msg.level || 'D',
+              buffer: msg.buffer || 'main',
+              save: !!msg.save,
+            });
+          } else if (this.isPaused) {
+            // 恢复：冲刷暂停期间缓存
+            if (this.pausedBuffer.length > 0) {
+              this.post({ type: 'append', text: this.pausedBuffer });
+              this.pausedBuffer = '';
+            }
+            this.isPaused = false;
+            this.post({ type: 'status', text: '已恢复' });
+          } else {
             this.post({ type: 'status', text: '已在运行中' });
-            return;
           }
-          if (!msg.serial) {
-            this.post({ type: 'status', text: '请先选择设备' });
-            return;
-          }
-          this.startProcess({
-            serial: msg.serial,
-            pkg: msg.pkg || '',
-            tag: msg.tag || '*',
-            level: msg.level || 'D',
-            buffer: msg.buffer || 'main',
-            save: !!msg.save,
-          });
           break;
         }
-        case 'stop': {
-          this.stopProcess();
+        case 'stop': // 兼容旧消息名
+        case 'pause': {
+          // 暂停：不终止进程，只停止向 UI 追加并缓存
+          if (this.isRunning && !this.isPaused) {
+            this.isPaused = true;
+            this.post({ type: 'status', text: '已暂停（后台仍在采集）' });
+          } else if (!this.isRunning) {
+            this.post({ type: 'status', text: '未在运行' });
+          }
           break;
         }
       }
     });
+  }
+
+  private refreshDevicesAsync() {
+    if (this.isRefreshingDevices) return;
+    this.isRefreshingDevices = true;
+    this.listDevices()
+      .then((devices) => {
+        const last = this.getLastConfig();
+        this.post({ type: 'devices', devices, defaultSerial: last?.serial ?? '' });
+      })
+      .finally(() => {
+        this.isRefreshingDevices = false;
+      });
+  }
+
+  private getLastConfig(): { serial: string; pkg: string; tag: string; level: string; buffer: string; save: boolean } | null {
+    const raw = this.context.globalState.get<any>(AndroidLogcatViewProvider.LAST_KEY);
+    if (!raw) return null;
+    const { serial = '', pkg = '', tag = '*', level = 'D', buffer = 'main', save = false } = raw as any;
+    return { serial, pkg, tag, level, buffer, save };
+  }
+
+  private setLastConfig(cfg: { serial: string; pkg: string; tag: string; level: string; buffer: string; save: boolean }) {
+    void this.context.globalState.update(AndroidLogcatViewProvider.LAST_KEY, cfg);
+  }
+
+  private postLastConfigToWebview() {
+    const last = this.getLastConfig();
+    if (last) {
+      this.post({ type: 'config', config: last });
+    }
+  }
+
+  private async autoStartIfPossible() {
+    if (this.hasAutoStarted || this.isRunning) return;
+    const devices = await this.listDevices();
+    if (!devices || devices.length === 0) {
+      this.post({ type: 'status', text: '未检测到设备，自动启动跳过' });
+      return;
+    }
+    const last = this.getLastConfig();
+    let targetSerial = last?.serial;
+    if (!targetSerial || !devices.find(d => d.serial === targetSerial)) {
+      targetSerial = devices[0].serial;
+    }
+    const startCfg = {
+      serial: targetSerial,
+      pkg: last?.pkg ?? '',
+      tag: last?.tag ?? '*',
+      level: last?.level ?? 'D',
+      buffer: last?.buffer ?? 'main',
+      save: last?.save ?? false,
+    };
+    this.startProcess(startCfg);
+    this.setLastConfig(startCfg);
+    this.hasAutoStarted = true;
   }
 
   private post(message: any) {
@@ -113,18 +204,36 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
     this.currentProc = proc;
     this.isRunning = true;
+    this.isPaused = false;
     this.post({ type: 'status', text: `启动: ${scriptPath} ${args.join(' ')}` });
 
     proc.stdout.on('data', (buf) => {
-      this.post({ type: 'append', text: buf.toString() });
+      const chunk = buf.toString();
+      if (this.isPaused) {
+        this.pausedBuffer += chunk;
+      } else if (this.view?.visible) {
+        this.post({ type: 'append', text: chunk });
+      } else {
+        this.bufferedWhileHidden += chunk;
+      }
     });
     proc.stderr.on('data', (buf) => {
-      this.post({ type: 'append', text: buf.toString() });
+      const chunk = buf.toString();
+      if (this.isPaused) {
+        this.pausedBuffer += chunk;
+      } else if (this.view?.visible) {
+        this.post({ type: 'append', text: chunk });
+      } else {
+        this.bufferedWhileHidden += chunk;
+      }
     });
     proc.on('close', (code, signal) => {
       this.post({ type: 'status', text: `已退出 (code=${code}, signal=${signal ?? ''})` });
       this.isRunning = false;
       this.currentProc = null;
+      this.bufferedWhileHidden = "";
+      this.isPaused = false;
+      this.pausedBuffer = '';
     });
     proc.on('error', (err) => {
       this.post({ type: 'status', text: `进程错误: ${String(err)}` });
@@ -141,6 +250,8 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     }
     this.currentProc = null;
     this.isRunning = false;
+    this.isPaused = false;
+    this.pausedBuffer = '';
     this.post({ type: 'status', text: '已停止' });
   }
 
@@ -184,7 +295,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     return htmlTmpl
       .replace(/\{\{CSP\}\}/g, csp)
       .replace(/\{\{NONCE\}\}/g, nonce)
-      .replace(/\{\{STYLE\}\}/g, css)
+      .replace('/*INJECT_STYLE*/', css)
       .replace(/\{\{SCRIPT\}\}/g, js);
   }
 }

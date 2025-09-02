@@ -39,6 +39,9 @@ cleanup() {
   [[ -n "${WATCHDOG_PID-}" ]] && kill "${WATCHDOG_PID}" 2>/dev/null || true
   # 删除临时文件
   [[ -n "${PID_MAP_PATH-}" ]] && rm -f "${PID_MAP_PATH}" 2>/dev/null || true
+  # 停止键盘监听并清理暂停状态
+  command -v stop_key_listener >/dev/null 2>&1 && stop_key_listener || true
+  command -v cleanup_pause_state >/dev/null 2>&1 && cleanup_pause_state || true
 }
 
 trap 'echo; echo "已中断 (SIGINT)"; cleanup; exit 130' INT
@@ -76,6 +79,7 @@ source "${__DIR}/lib/device.sh"
 source "${__DIR}/lib/filters.sh"
 source "${__DIR}/lib/pidmap.sh"
 source "${__DIR}/lib/runner.sh"
+source "${__DIR}/lib/pausable.sh"
 
 # 参数健壮性校验
 LEVEL="$(printf '%s' "$LEVEL" | tr '[:lower:]' '[:upper:]')"
@@ -211,6 +215,7 @@ echo "Raw File        : $($RAW_FILE && echo yes || echo no)"
 echo "Out Dir         : ${OUT_DIR}/"
 echo "Output File     : $TXT_PATH"
 echo "# ========================="
+echo "(按 p 暂停/恢复显示，按 q 退出)"
 
 # 若保存，则将运行配置写入文件首部，随后日志以追加方式写入
 if $SAVE; then
@@ -266,6 +271,8 @@ fi
 start_pidmap_refresher
 # 清理在统一 cleanup 中处理
 
+# 按键监听改为内联到 pausable_sink 前台进程中，无需在此启动
+
 # 定时结束（如设置）
 if [[ -n "$DURATION" ]]; then
   (
@@ -295,7 +302,7 @@ if $SAVE; then
     echo "已保存：$TXT_PATH（去色）"
   fi
 else
-  eval "$PIPELINE"
+  eval "$PIPELINE" | pausable_sink
 fi
 
 

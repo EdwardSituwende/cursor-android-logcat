@@ -20,6 +20,14 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this.getHtml();
 
+    // 切换 Tab 或面板时，视图重新可见则刷新设备列表
+    webviewView.onDidChangeVisibility(async () => {
+      if (webviewView.visible) {
+        const devices = await this.listDevices();
+        this.post({ type: 'devices', devices });
+      }
+    });
+
     webviewView.onDidDispose(() => {
       this.stopProcess();
     });

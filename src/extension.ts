@@ -96,7 +96,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           // 暂停：不终止进程，只停止向 UI 追加并缓存
           if (this.isRunning && !this.isPaused) {
             this.isPaused = true;
-            this.post({ type: 'status', text: '已暂停（后台仍在采集）' });
+            this.post({ type: 'status', text: '已暂停' });
           } else if (!this.isRunning) {
             this.post({ type: 'status', text: '未在运行' });
           }

@@ -18,6 +18,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private isPaused = false;
   private pausedBuffer = "";
   private hasAutoStarted = false;
+  private requestedPaused = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -78,6 +79,8 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               buffer: msg.buffer || 'main',
               save: !!msg.save,
             });
+            // 恢复语义：用户点击恢复，应清除“期望暂停”标记
+            this.requestedPaused = false;
           } else if (this.isPaused) {
             // 恢复：冲刷暂停期间缓存
             if (this.pausedBuffer.length > 0) {
@@ -85,6 +88,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               this.pausedBuffer = '';
             }
             this.isPaused = false;
+            this.requestedPaused = false;
             this.post({ type: 'status', text: '已恢复' });
           } else {
             this.post({ type: 'status', text: '已在运行中' });
@@ -94,11 +98,12 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         case 'stop': // 兼容旧消息名
         case 'pause': {
           // 暂停：不终止进程，只停止向 UI 追加并缓存
+          this.requestedPaused = true;
           if (this.isRunning && !this.isPaused) {
             this.isPaused = true;
             this.post({ type: 'status', text: '已暂停' });
           } else if (!this.isRunning) {
-            this.post({ type: 'status', text: '未在运行' });
+            this.post({ type: 'status', text: '未在运行（已记录暂停指令，启动后生效）' });
           }
           break;
         }
@@ -204,8 +209,12 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
     this.currentProc = proc;
     this.isRunning = true;
-    this.isPaused = false;
     this.post({ type: 'status', text: `启动: ${scriptPath} ${args.join(' ')}` });
+    // 如果在启动前用户已请求暂停，则立即进入暂停模式，开始缓冲但不输出
+    if (this.requestedPaused) {
+      this.isPaused = true;
+      this.post({ type: 'status', text: '按用户指令：启动后立即暂停' });
+    }
 
     proc.stdout.on('data', (buf) => {
       const chunk = buf.toString();

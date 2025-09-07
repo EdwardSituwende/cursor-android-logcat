@@ -3,8 +3,11 @@ const $ = (id) => document.getElementById(id);
 
 const deviceSel = $('device');
 const toggleBtn = $('toggle');
+const clearBtn = $('clear');
 const logEl = $('log');
 const statusEl = $('status');
+let DEBUG = true;
+function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments); } catch(e){} }
 
 function setStatus(t){ statusEl.textContent = t; }
 
@@ -27,6 +30,7 @@ function enableFollowAndStick(){
   }
   logEl.scrollTop = logEl.scrollHeight;
   setStatus('已恢复跟随滚动');
+  dlog('[follow] manual restore');
 }
 function scheduleFlush(){
   if (flushScheduled) return;
@@ -37,6 +41,7 @@ function scheduleFlush(){
     const stick = autoFollow && isAtBottom();
     // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝
     logEl.appendChild(document.createTextNode(queuedAppend));
+    dlog('[flush] appended len=', queuedAppend.length, 'stick=', stick);
     queuedAppend = '';
     if (stick) {
       logEl.scrollTop = logEl.scrollHeight;
@@ -48,11 +53,27 @@ function append(t){
   if (!autoFollow || !isAtBottom()) {
     pendingWhileNotFollowing += t;
     setStatus('已停止跟随滚动（有新日志待合并）');
+    dlog('[append] buffered (len+=', t.length, ') totalPending=', pendingWhileNotFollowing.length);
     return;
   }
   // 跟随时汇总追加，下一帧一次性刷新
   queuedAppend += t;
+  dlog('[append] queued (len+=', t.length, ') totalQueued=', queuedAppend.length);
   scheduleFlush();
+}
+function clearLog(){
+  // 清空可见日志与前端缓冲
+  logEl.textContent = '';
+  pendingWhileNotFollowing = '';
+  queuedAppend = '';
+  flushScheduled = false;
+  // 重置跟随状态并滚动到底部（空内容即顶部）
+  autoFollow = true;
+  logEl.scrollTop = logEl.scrollHeight;
+  setStatus('已清空');
+  dlog('[click] clear');
+  // 通知后端清空其缓冲
+  vscode.postMessage({ type: 'clear' });
 }
 function setDevices(devs){
   deviceSel.innerHTML = '';
@@ -77,12 +98,27 @@ window.addEventListener('message', (e) => {
     case 'status': setStatus(msg.text); break;
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices); break;
+    case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
+    case 'config':
+      try {
+        if (msg.config) {
+          $('pkg').value = msg.config.pkg || '';
+          $('tag').value = msg.config.tag || '*';
+          $('level').value = msg.config.level || 'D';
+          $('buffer').value = msg.config.buffer || 'main';
+          const saveEl = document.getElementById('save');
+          if (saveEl) saveEl.checked = !!msg.config.save;
+          dlog('[config] applied', msg.config);
+        }
+      } catch (e) {}
+      break;
   }
 });
 
 // 点击设备下拉框时，如果只有“未检测到设备”，则触发刷新
 deviceSel.addEventListener('click', () => {
   if (deviceSel.options.length === 1 && deviceSel.options[0].value === '') {
+    dlog('[devices] click -> refresh');
     vscode.postMessage({ type: 'refreshDevices' });
   }
 });
@@ -95,12 +131,15 @@ logEl.addEventListener('scroll', () => {
       // 回到底部时合并缓冲并保持跟随
       if (pendingWhileNotFollowing) {
         queuedAppend += pendingWhileNotFollowing;
+        dlog('[scroll] merge pending len=', pendingWhileNotFollowing.length);
         pendingWhileNotFollowing = '';
         scheduleFlush();
       }
       setStatus('已恢复跟随滚动');
+      dlog('[scroll] follow=true');
     } else {
       setStatus('已停止跟随滚动');
+      dlog('[scroll] follow=false');
     }
   }
 });
@@ -113,6 +152,7 @@ window.addEventListener('keydown', (e) => {
     enableFollowAndStick();
   }
 });
+
 let uiPaused = false; // 仅用于按钮文字切换
 toggleBtn.addEventListener('click', () => {
   if (uiPaused) {
@@ -126,19 +166,23 @@ toggleBtn.addEventListener('click', () => {
       buffer: $('buffer').value,
       save: document.getElementById('save').checked,
     });
+    dlog('[click] resume');
     toggleBtn.textContent = '暂停';
     uiPaused = false;
   } else {
     // 暂停
     vscode.postMessage({ type: 'pause' });
+    dlog('[click] pause');
     toggleBtn.textContent = '恢复';
     uiPaused = true;
   }
 });
 
-vscode.postMessage({ type: 'ready' });
+// 绑定清空按钮
+clearBtn.addEventListener('click', clearLog);
 
-// 首帧：避免扩展后台自动启动时按钮文字状态与真实暂停状态不一致
+vscode.postMessage({ type: 'ready' });
+// 首帧：避免扩展后台自动启动时按钮文字状态与真实状态不一致
 window.addEventListener('load', () => {
   toggleBtn.textContent = uiPaused ? '恢复' : '暂停';
 });

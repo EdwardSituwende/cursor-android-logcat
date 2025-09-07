@@ -19,17 +19,47 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private pausedBuffer = "";
   private hasAutoStarted = false;
   private requestedPaused = false;
+  private output: vscode.OutputChannel;
+  private debugEnabled: boolean;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.output = vscode.window.createOutputChannel('Android Logcat (Cursor)');
+    this.debugEnabled = !!vscode.workspace.getConfiguration('cursorAndroidLogcat').get('debug');
+  }
+
+  private debugLog(...parts: any[]) {
+    if (!this.debugEnabled) return;
+    try {
+      const text = parts.map((p) => {
+        if (typeof p === 'string') return p;
+        try { return JSON.stringify(p); } catch { return String(p); }
+      }).join(' ');
+      this.output.appendLine(`[debug] ${text}`);
+    } catch {
+      // ignore logging errors
+    }
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this.view = webviewView;
+    this.debugLog('resolveWebviewView');
     // 保持 Webview 在隐藏时不被销毁，切换 Tab 后无需重新加载
     webviewView.webview.options = { enableScripts: true, retainContextWhenHidden: true } as any;
     webviewView.webview.html = this.getHtml();
 
+    // 监听配置变化，动态更新调试开关
+    const cfgDisp = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('cursorAndroidLogcat.debug')) {
+        this.debugEnabled = !!vscode.workspace.getConfiguration('cursorAndroidLogcat').get('debug');
+        this.debugLog('config changed: debug =', this.debugEnabled);
+        this.post({ type: 'debug', enabled: this.debugEnabled });
+      }
+    });
+    this.context.subscriptions.push(cfgDisp);
+
     // 切换 Tab 或面板时：仅在恢复可见时一次性冲刷隐藏期间积累的日志，避免逐条回放造成的可见延迟
     webviewView.onDidChangeVisibility(async () => {
+      this.debugLog('onDidChangeVisibility', { visible: webviewView.visible, hiddenBuffered: this.bufferedWhileHidden.length });
       if (webviewView.visible) {
         if (this.bufferedWhileHidden.length > 0) {
           this.post({ type: 'append', text: this.bufferedWhileHidden });
@@ -41,18 +71,30 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.onDidDispose(() => {
+      this.debugLog('onDidDispose');
       this.stopProcess();
     });
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (msg?.type && msg.type !== 'append') this.debugLog('onDidReceiveMessage', msg.type);
       switch (msg.type) {
         case 'ready': {
+          this.post({ type: 'debug', enabled: this.debugEnabled });
           this.refreshDevicesAsync();
           this.postLastConfigToWebview();
           this.autoStartIfPossible();
           break;
         }
+        case 'clear': {
+          // 清空后端缓冲，不终止进程
+          this.bufferedWhileHidden = "";
+          this.pausedBuffer = "";
+          this.post({ type: 'status', text: '已清空（仅UI与缓冲）' });
+          this.debugLog('cleared buffers');
+          break;
+        }
         case 'refreshDevices': {
+          this.debugLog('refreshDevices');
           this.refreshDevicesAsync();
           break;
         }
@@ -63,6 +105,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               this.post({ type: 'status', text: '请先选择设备' });
               return;
             }
+            this.debugLog('startProcess by user', { serial: msg.serial, pkg: msg.pkg, tag: msg.tag, level: msg.level, buffer: msg.buffer, save: !!msg.save });
             this.startProcess({
               serial: msg.serial,
               pkg: msg.pkg || '',
@@ -90,6 +133,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             this.isPaused = false;
             this.requestedPaused = false;
             this.post({ type: 'status', text: '已恢复' });
+            this.debugLog('resumed');
           } else {
             this.post({ type: 'status', text: '已在运行中' });
           }
@@ -102,6 +146,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           if (this.isRunning && !this.isPaused) {
             this.isPaused = true;
             this.post({ type: 'status', text: '已暂停' });
+            this.debugLog('paused');
           } else if (!this.isRunning) {
             this.post({ type: 'status', text: '未在运行（已记录暂停指令，启动后生效）' });
           }
@@ -114,13 +159,16 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private refreshDevicesAsync() {
     if (this.isRefreshingDevices) return;
     this.isRefreshingDevices = true;
+    this.debugLog('listDevices:start');
     this.listDevices()
       .then((devices) => {
         const last = this.getLastConfig();
         this.post({ type: 'devices', devices, defaultSerial: last?.serial ?? '' });
+        this.debugLog('listDevices:found', devices?.length ?? 0);
       })
       .finally(() => {
         this.isRefreshingDevices = false;
+        this.debugLog('listDevices:done');
       });
   }
 
@@ -139,14 +187,17 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     const last = this.getLastConfig();
     if (last) {
       this.post({ type: 'config', config: last });
+      this.debugLog('post config', last);
     }
   }
 
   private async autoStartIfPossible() {
     if (this.hasAutoStarted || this.isRunning) return;
+    this.debugLog('autoStartIfPossible:checking');
     const devices = await this.listDevices();
     if (!devices || devices.length === 0) {
       this.post({ type: 'status', text: '未检测到设备，自动启动跳过' });
+      this.debugLog('autoStartIfPossible:no devices');
       return;
     }
     const last = this.getLastConfig();
@@ -162,12 +213,16 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       buffer: last?.buffer ?? 'main',
       save: last?.save ?? false,
     };
+    this.debugLog('autoStartIfPossible:start', startCfg);
     this.startProcess(startCfg);
     this.setLastConfig(startCfg);
     this.hasAutoStarted = true;
   }
 
   private post(message: any) {
+    if (this.debugEnabled && message && message.type && message.type !== 'append') {
+      this.debugLog('post -> webview', message.type);
+    }
     this.view?.webview.postMessage(message);
   }
 
@@ -210,10 +265,12 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     this.currentProc = proc;
     this.isRunning = true;
     this.post({ type: 'status', text: `启动: ${scriptPath} ${args.join(' ')}` });
+    this.debugLog('spawn', { scriptPath, args });
     // 如果在启动前用户已请求暂停，则立即进入暂停模式，开始缓冲但不输出
     if (this.requestedPaused) {
       this.isPaused = true;
       this.post({ type: 'status', text: '按用户指令：启动后立即暂停' });
+      this.debugLog('requestedPaused honored at start');
     }
 
     proc.stdout.on('data', (buf) => {
@@ -238,6 +295,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
     proc.on('close', (code, signal) => {
       this.post({ type: 'status', text: `已退出 (code=${code}, signal=${signal ?? ''})` });
+      this.debugLog('process closed', { code, signal });
       this.isRunning = false;
       this.currentProc = null;
       this.bufferedWhileHidden = "";
@@ -246,10 +304,12 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
     proc.on('error', (err) => {
       this.post({ type: 'status', text: `进程错误: ${String(err)}` });
+      this.debugLog('process error', String(err));
     });
   }
 
   private stopProcess() {
+    this.debugLog('stopProcess');
     if (this.currentProc) {
       try {
         this.currentProc.kill('SIGINT');

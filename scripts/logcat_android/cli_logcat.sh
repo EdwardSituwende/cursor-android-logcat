@@ -27,6 +27,17 @@ source "${__DIR}/lib/usage.sh"
 
 usage || true
 
+# 启动时先尝试复位终端，避免上一次异常退出导致本次进入格式错乱或卡死
+reset_terminal() {
+  if [[ -t 0 ]]; then
+    stty sane 2>/dev/null || true
+  fi
+  if command -v tput >/dev/null 2>&1; then
+    tput sgr0 2>/dev/null || true
+  fi
+}
+reset_terminal || true
+
 # 统一清理与信号处理
 CLEANED_UP=0
 cleanup() {
@@ -42,6 +53,8 @@ cleanup() {
   # 停止键盘监听并清理暂停状态
   command -v stop_key_listener >/dev/null 2>&1 && stop_key_listener || true
   command -v cleanup_pause_state >/dev/null 2>&1 && cleanup_pause_state || true
+  # 退出时复位终端，确保下一次进入不受影响
+  reset_terminal || true
 }
 
 trap 'echo; echo "已中断 (SIGINT)"; cleanup; exit 130' INT
@@ -117,6 +130,11 @@ if [[ -n "$PACKAGE" ]]; then
       PID="$("${ADB[@]}" shell ps -A 2>/dev/null | awk -v p="$PACKAGE" '$NF==p{print $2; exit}')"
     fi
   fi
+fi
+
+# 若 stdout 不是 TTY（如被管道/重定向），强制关闭颜色，避免 ANSI 码引起对齐错乱
+if [[ ! -t 1 ]]; then
+  NO_COLOR=true
 fi
 
 # 处理 logcat -v 格式和颜色

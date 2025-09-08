@@ -6,6 +6,8 @@ const toggleBtn = $('toggle');
 const clearBtn = $('clear');
 const logEl = $('log');
 const statusEl = $('status');
+const filterInput = $('filter');
+const matchCaseBtn = $('matchCase');
 let DEBUG = true;
 function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments); } catch(e){} }
 
@@ -16,6 +18,11 @@ let autoFollow = true;
 let pendingWhileNotFollowing = '';
 let queuedAppend = '';
 let flushScheduled = false;
+const MAX_LOG_TEXT_LENGTH = 2_000_000; // 最多约 2MB 文本，超过则从头部裁剪
+let backlogText = '';
+let filterText = '';
+let matchCase = false;
+let rebuildScheduled = false;
 function isAtBottom(){
   // 放宽阈值，避免因内容持续增长导致“永远不在底部”的情况
   return (logEl.scrollTop + logEl.clientHeight) >= (logEl.scrollHeight - 40);
@@ -39,10 +46,25 @@ function scheduleFlush(){
     flushScheduled = false;
     if (!queuedAppend) return;
     const stick = autoFollow && isAtBottom();
-    // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝
-    logEl.appendChild(document.createTextNode(queuedAppend));
+    // 更新原始日志备份（用于过滤重建）
+    backlogText += queuedAppend;
+    if (backlogText.length > MAX_LOG_TEXT_LENGTH) {
+      backlogText = backlogText.slice(backlogText.length - MAX_LOG_TEXT_LENGTH);
+    }
+    // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝；若有过滤器，则仅追加匹配子集
+    const displayChunk = filterText ? filterTextChunk(queuedAppend) : queuedAppend;
+    if (displayChunk) {
+      logEl.appendChild(document.createTextNode(displayChunk));
+    }
     dlog('[flush] appended len=', queuedAppend.length, 'stick=', stick);
     queuedAppend = '';
+    // 裁剪过长内容，避免 DOM 与文本无限增长
+    if (logEl.textContent && logEl.textContent.length > MAX_LOG_TEXT_LENGTH) {
+      const overflow = logEl.textContent.length - MAX_LOG_TEXT_LENGTH;
+      // 截断前 N 个字符；为避免打断多字节序列，这里处理纯文本足够安全
+      logEl.textContent = logEl.textContent.slice(overflow);
+      dlog('[trim] removed', overflow, 'chars');
+    }
     if (stick) {
       logEl.scrollTop = logEl.scrollHeight;
     }
@@ -67,6 +89,7 @@ function clearLog(){
   pendingWhileNotFollowing = '';
   queuedAppend = '';
   flushScheduled = false;
+  backlogText = '';
   // 重置跟随状态并滚动到底部（空内容即顶部）
   autoFollow = true;
   logEl.scrollTop = logEl.scrollHeight;
@@ -99,19 +122,6 @@ window.addEventListener('message', (e) => {
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices); break;
     case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
-    case 'config':
-      try {
-        if (msg.config) {
-          $('pkg').value = msg.config.pkg || '';
-          $('tag').value = msg.config.tag || '*';
-          $('level').value = msg.config.level || 'D';
-          $('buffer').value = msg.config.buffer || 'main';
-          const saveEl = document.getElementById('save');
-          if (saveEl) saveEl.checked = !!msg.config.save;
-          dlog('[config] applied', msg.config);
-        }
-      } catch (e) {}
-      break;
   }
 });
 
@@ -160,10 +170,6 @@ toggleBtn.addEventListener('click', () => {
     vscode.postMessage({
       type: 'start',
       serial: deviceSel.value,
-      pkg: $('pkg').value.trim(),
-      tag: $('tag').value.trim(),
-      level: $('level').value,
-      buffer: $('buffer').value,
       save: document.getElementById('save').checked,
     });
     dlog('[click] resume');
@@ -180,6 +186,47 @@ toggleBtn.addEventListener('click', () => {
 
 // 绑定清空按钮
 clearBtn.addEventListener('click', clearLog);
+
+// 过滤：输入即刻应用；采用逐帧重建，避免频繁 DOM 重排
+function scheduleRebuild(){
+  if (rebuildScheduled) return;
+  rebuildScheduled = true;
+  requestAnimationFrame(() => {
+    rebuildScheduled = false;
+    const stick = autoFollow && isAtBottom();
+    const text = filterText ? filterTextChunk(backlogText) : backlogText;
+    logEl.textContent = text;
+    if (stick) logEl.scrollTop = logEl.scrollHeight;
+  });
+}
+function filterTextChunk(text){
+  if (!filterText) return text;
+  const lines = text.split(/\r?\n/);
+  const needle = matchCase ? filterText : filterText.toLowerCase();
+  let out = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const hay = matchCase ? line : line.toLowerCase();
+    if (hay.indexOf(needle) !== -1) {
+      out += line;
+      if (i < lines.length - 1) out += '\n';
+    } else {
+      if (i < lines.length - 1) {
+        // 丢弃该行但保留换行对齐
+      }
+    }
+  }
+  return out;
+}
+filterInput.addEventListener('input', (e) => {
+  filterText = String(e.target.value || '');
+  scheduleRebuild();
+});
+matchCaseBtn.addEventListener('click', () => {
+  matchCase = !matchCase;
+  matchCaseBtn.classList.toggle('on', matchCase);
+  scheduleRebuild();
+});
 
 vscode.postMessage({ type: 'ready' });
 // 首帧：避免扩展后台自动启动时按钮文字状态与真实状态不一致

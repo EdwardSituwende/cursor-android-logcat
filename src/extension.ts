@@ -21,6 +21,10 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private requestedPaused = false;
   private output: vscode.OutputChannel;
   private debugEnabled: boolean;
+  private pendingAppend: string = "";
+  private appendFlushTimer: NodeJS.Timeout | null = null;
+  private readonly APPEND_FLUSH_INTERVAL_MS = 33; // ~30fps 的刷新节奏
+  private readonly APPEND_SIZE_THRESHOLD = 64 * 1024; // 达到阈值立即冲刷，减少内存占用
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.output = vscode.window.createOutputChannel('Android Logcat (Cursor)');
@@ -67,6 +71,13 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         }
         // 设备列表刷新：放在微任务后异步执行，不阻塞 UI 首帧
         queueMicrotask(() => this.refreshDevicesAsync());
+      } else {
+        // 切换为不可见：将尚未发送的聚合数据并入隐藏缓冲，取消定时器
+        if (this.pendingAppend.length > 0) {
+          this.bufferedWhileHidden += this.pendingAppend;
+          this.pendingAppend = "";
+        }
+        this.cancelAppendFlushTimer();
       }
     });
 
@@ -278,7 +289,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       if (this.isPaused) {
         this.pausedBuffer += chunk;
       } else if (this.view?.visible) {
-        this.post({ type: 'append', text: chunk });
+        this.queueAppend(chunk);
       } else {
         this.bufferedWhileHidden += chunk;
       }
@@ -288,7 +299,7 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       if (this.isPaused) {
         this.pausedBuffer += chunk;
       } else if (this.view?.visible) {
-        this.post({ type: 'append', text: chunk });
+        this.queueAppend(chunk);
       } else {
         this.bufferedWhileHidden += chunk;
       }
@@ -306,6 +317,39 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: 'status', text: `进程错误: ${String(err)}` });
       this.debugLog('process error', String(err));
     });
+  }
+
+  private queueAppend(text: string) {
+    this.pendingAppend += text;
+    if (this.pendingAppend.length >= this.APPEND_SIZE_THRESHOLD) {
+      this.flushAppendNow();
+      return;
+    }
+    if (!this.appendFlushTimer) {
+      this.appendFlushTimer = setTimeout(() => this.flushAppendNow(), this.APPEND_FLUSH_INTERVAL_MS);
+    }
+  }
+
+  private flushAppendNow() {
+    if (!this.pendingAppend) {
+      this.cancelAppendFlushTimer();
+      return;
+    }
+    // 仅在可见时发送；若不可见，合并到隐藏缓冲
+    if (this.view?.visible) {
+      this.post({ type: 'append', text: this.pendingAppend });
+    } else {
+      this.bufferedWhileHidden += this.pendingAppend;
+    }
+    this.pendingAppend = "";
+    this.cancelAppendFlushTimer();
+  }
+
+  private cancelAppendFlushTimer() {
+    if (this.appendFlushTimer) {
+      clearTimeout(this.appendFlushTimer);
+      this.appendFlushTimer = null;
+    }
   }
 
   private stopProcess() {

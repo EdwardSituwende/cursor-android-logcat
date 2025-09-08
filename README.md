@@ -1,8 +1,8 @@
 [TOC]
 
-### android-logcat（Cursor 插件）
+### android-logcat（Cursor、Trace插件）
 
-这是我为 Cursor 打造的一个最小但实用的 Android Logcat 面板插件。它在底部 Toggle Panel 中提供了一个名为 “android logcat” 的标签页，支持选择设备、包名、Tag、Level、Buffer，并可一键开始/停止、保存日志到文件。
+为Cursor、Trace打造的一个简单且实用的 Android Logcat 面板插件。它在底部 Toggle Panel 中提供了一个名为 “android logcat” 的标签页，支持选择设备、包名、Tag、Level、Buffer，并可一键开始/停止、保存日志到文件。
 
 #### 架构概览
 

@@ -24,6 +24,33 @@ let backlogText = '';
 let filterText = '';
 let matchCase = false;
 let rebuildScheduled = false;
+// 颜色渲染：转义与按行着色
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
+}
+function detectLevel(line){
+  // 典型格式：日期 时间 PID TID L TAG: message
+  // 在空格分隔的 token 里找第一个是 V/D/I/W/E/F/S 的单字母
+  const tokens = line.trim().split(/\s+/);
+  for (let i = 0; i < tokens.length; i++){
+    const t = tokens[i];
+    if (t.length === 1 && /[VDIWEFS]/.test(t)) return t.toLowerCase();
+  }
+  return '';
+}
+function renderHtmlFromText(text){
+  if (!text) return '';
+  const lines = text.split(/\r?\n/);
+  let html = '';
+  for (let i = 0; i < lines.length; i++){
+    const line = lines[i];
+    if (line === '' && i === lines.length - 1) break; // 末尾空行避免多余节点
+    const lv = detectLevel(line);
+    const cls = lv ? (' lv-' + lv) : '';
+    html += '<span class="' + cls.trim() + '">' + escapeHtml(line) + '</span>\n';
+  }
+  return html;
+}
 function isAtBottom(){
   // 放宽阈值，避免因内容持续增长导致“永远不在底部”的情况
   return (logEl.scrollTop + logEl.clientHeight) >= (logEl.scrollHeight - 40);
@@ -55,16 +82,15 @@ function scheduleFlush(){
     // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝；若有过滤器，则仅追加匹配子集
     const displayChunk = filterText ? filterTextChunk(queuedAppend) : queuedAppend;
     if (displayChunk) {
-      logEl.appendChild(document.createTextNode(displayChunk));
+      // 追加高亮 HTML
+      logEl.insertAdjacentHTML('beforeend', renderHtmlFromText(displayChunk));
     }
     dlog('[flush] appended len=', queuedAppend.length, 'stick=', stick);
     queuedAppend = '';
-    // 裁剪过长内容，避免 DOM 与文本无限增长
-    if (logEl.textContent && logEl.textContent.length > MAX_LOG_TEXT_LENGTH) {
-      const overflow = logEl.textContent.length - MAX_LOG_TEXT_LENGTH;
-      // 截断前 N 个字符；为避免打断多字节序列，这里处理纯文本足够安全
-      logEl.textContent = logEl.textContent.slice(overflow);
-      dlog('[trim] removed', overflow, 'chars');
+    // 若超长，直接基于 backlog 重建，避免混合裁剪破坏标记
+    if (backlogText.length >= MAX_LOG_TEXT_LENGTH) {
+      const text = filterText ? filterTextChunk(backlogText) : backlogText;
+      logEl.innerHTML = renderHtmlFromText(text);
     }
     if (stick) {
       logEl.scrollTop = logEl.scrollHeight;
@@ -86,7 +112,7 @@ function append(t){
 }
 function clearLog(){
   // 清空可见日志与前端缓冲
-  logEl.textContent = '';
+  logEl.innerHTML = '';
   pendingWhileNotFollowing = '';
   queuedAppend = '';
   flushScheduled = false;
@@ -196,7 +222,7 @@ function scheduleRebuild(){
     rebuildScheduled = false;
     const stick = autoFollow && isAtBottom();
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
-    logEl.textContent = text;
+    logEl.innerHTML = renderHtmlFromText(text);
     if (softWrapChk && softWrapChk.checked) {
       logEl.classList.add('wrap');
     } else {

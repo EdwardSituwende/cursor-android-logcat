@@ -2,7 +2,7 @@
   "name": "cursor-android-logcat",
   "displayName": "Android Logcat (Cursor)",
   "description": "Minimal Android Logcat panel integrated with your cli_logcat.sh",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "publisher": "edward-local",
   "repository": {
     "type": "git",

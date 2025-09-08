@@ -18,5 +18,13 @@ label { font-size: 12px; }
 button { height: 25px; }
 #log { white-space: pre; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; min-height: 0; }
 #log.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+/* log level colors */
+.lv-v { color: #7f8c8d; }
+.lv-d { color: #bdc3c7; }
+.lv-i { color: #2ecc71; }
+.lv-w { color: #f1c40f; }
+.lv-e { color: #e74c3c; }
+.lv-f { color: #9b59b6; }
+.lv-s { color: #1abc9c; }
 #status { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0 0 4px 0; font-family: var(--vscode-editor-font-family, monospace); }
 

@@ -16,6 +16,7 @@ label { font-size: 12px; }
 .row input:not([type="checkbox"])::placeholder { color: var(--vscode-input-placeholderForeground); }
 .row select { padding-right: 25px; }
 button { height: 25px; }
-#log { white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; min-height: 0; }
+#log { white-space: pre; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; min-height: 0; }
+#log.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 #status { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0 0 4px 0; font-family: var(--vscode-editor-font-family, monospace); }
 

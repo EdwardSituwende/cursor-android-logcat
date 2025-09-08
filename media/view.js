@@ -8,6 +8,7 @@ const logEl = $('log');
 const statusEl = $('status');
 const filterInput = $('filter');
 const matchCaseBtn = $('matchCase');
+const softWrapChk = $('softWrap');
 let DEBUG = true;
 function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments); } catch(e){} }
 
@@ -196,6 +197,11 @@ function scheduleRebuild(){
     const stick = autoFollow && isAtBottom();
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
     logEl.textContent = text;
+    if (softWrapChk && softWrapChk.checked) {
+      logEl.classList.add('wrap');
+    } else {
+      logEl.classList.remove('wrap');
+    }
     if (stick) logEl.scrollTop = logEl.scrollHeight;
   });
 }
@@ -220,17 +226,56 @@ function filterTextChunk(text){
 }
 filterInput.addEventListener('input', (e) => {
   filterText = String(e.target.value || '');
+  try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
   scheduleRebuild();
 });
 matchCaseBtn.addEventListener('click', () => {
   matchCase = !matchCase;
   matchCaseBtn.classList.toggle('on', matchCase);
+  try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
   scheduleRebuild();
+});
+
+// 换行（Soft-wrap）
+softWrapChk.addEventListener('change', () => {
+  if (softWrapChk.checked) {
+    logEl.classList.add('wrap');
+  } else {
+    logEl.classList.remove('wrap');
+  }
+  try {
+    const st = vscode.getState && vscode.getState();
+    vscode.setState({
+      filterText: filterText,
+      matchCase: matchCase,
+      softWrap: !!softWrapChk.checked,
+    });
+  } catch(e){}
 });
 
 vscode.postMessage({ type: 'ready' });
 // 首帧：避免扩展后台自动启动时按钮文字状态与真实状态不一致
 window.addEventListener('load', () => {
   toggleBtn.textContent = uiPaused ? '恢复' : '暂停';
+  // 恢复过滤器状态
+  try {
+    const st = vscode.getState && vscode.getState();
+    if (st) {
+      if (typeof st.filterText === 'string') {
+        filterText = st.filterText;
+        filterInput.value = st.filterText;
+      }
+      if (typeof st.matchCase === 'boolean') {
+        matchCase = !!st.matchCase;
+        matchCaseBtn.classList.toggle('on', matchCase);
+      }
+      if (typeof st.softWrap === 'boolean') {
+        softWrapChk.checked = !!st.softWrap;
+        if (softWrapChk.checked) logEl.classList.add('wrap');
+      }
+      // 初次进入根据状态重建视图
+      scheduleRebuild();
+    }
+  } catch(e){}
 });
 

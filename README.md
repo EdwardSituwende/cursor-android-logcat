@@ -1,8 +1,8 @@
 [TOC]
 
-### android-logcat（Cursor、Trace插件）
+### android-logcat（Cursor、Trace 插件）
 
-为Cursor、Trace打造的一个简单且实用的 Android Logcat 面板插件。它在底部 Toggle Panel 中提供了一个名为 “android logcat” 的标签页，支持选择设备、包名、Tag、Level、Buffer，并可一键开始/停止、保存日志到文件。
+为 Cursor、Trace 打造的一个轻量且实用的 Android Logcat 面板插件。在底部 Toggle Panel 中提供 “android logcat” 标签页，支持设备选择、实时过滤、大小写匹配、软换行、暂停/恢复、清空日志、按级别着色，以及将日志保存到文件。
 
 #### 架构概览
 
@@ -29,14 +29,28 @@ flowchart TB
 ```
 
 - Webview 层（`view.html` + `view.css` + `view.js`）渲染 UI，所有交互通过 `postMessage` 与 `extension.ts` 通信。
-- 扩展后端（`extension.ts`）用 `child_process.spawn` 调用 `cli_logcat.sh`，通过 `--no-color` 输出加上 `DISABLE_SCRIPT=1` 环境变量，避免 `script` 在无 TTY 环境报错；实时把日志流写回 Webview。
-- 脚本层：我把原来的 `cli_logcat.sh` 内置到了 `scripts/logcat_android/` 下；默认不需要用户额外配置。
+- 扩展后端（`extension.ts`）使用 `child_process.spawn` 调用 `cli_logcat.sh`，通过 `--no-color` 输出加上 `DISABLE_SCRIPT=1` 环境变量，避免在无 TTY 环境报错；并对日志流做批量聚合与节流后回传到 Webview。
+- 脚本层：内置 `scripts/logcat_android/cli_logcat.sh`，默认可直接使用。
 
-#### 主要能力
-- 面板位置：底部 Toggle Panel 顶部标签 “android logcat”（带图标）。
+#### 布局与主要能力
+- 第一行（顶栏）：设备下拉框、保存到文件、过滤输入框、Cc（Match case）开关。输入框实时过滤当前视图。
+- 第二行（状态）：展示当前跟随/暂停等状态提示。
+- 第三行（主体）：
+  - 左侧 50px 侧栏：按钮纵向排列（暂停/恢复、清空）、Sp（Soft-wrap）复选框。
+  - 右侧日志视图：可滚动、支持软换行、按级别着色与快速过滤。
+
+其它能力：
 - 设备获取：`adb devices -l` 自动列出可选设备。
-- 过滤配置：包名、Tag（多 tag 支持脚本侧已有）、Level、Buffer。
-- 开始/停止：流式显示日志；可选“保存到文件（-f）”。
+- 暂停/恢复：暂停仅停止向 UI 追加，进程不退出；恢复会一次性冲刷暂停期间缓存。
+- 清空：仅清空 UI 与缓冲，不中断采集进程。
+- 保存到文件：启用后传入 `-f` 由脚本侧保存。
+- 跟随滚动：停留底部时自动跟随；离开底部时合并缓冲并提示。
+- 颜色高亮：按行检测级别 V/D/I/W/E/F/S，应用对应颜色，提升可读性。
+- 性能优化：扩展端 ~30fps/64KB 批量聚合后发送；隐藏时缓冲、显示时一次性冲刷；前端最大文本约 2MB，超限从头裁剪；requestAnimationFrame 批量渲染。
+- 状态持久化：过滤词、Cc、Sp 状态使用 Webview state 持久化，切换 Tab 后仍保留。
+
+快捷操作：
+- 双击日志区域 / 点击状态栏 / 键盘 End：快速恢复到底部并继续跟随。
 
 #### 本地开发与编译
 1) 安装依赖与构建
@@ -55,7 +69,8 @@ npm run compile
 
 #### 配置
 - `cursorAndroidLogcat.scriptPath`：可覆盖默认脚本路径。
-  - 默认留空：自动指向扩展内置脚本 `scripts/logcat_android/cli_logcat.sh`。
+  - 留空：指向扩展内置脚本 `scripts/logcat_android/cli_logcat.sh`。
+- `cursorAndroidLogcat.debug`：启用后输出调试日志到 `Android Logcat (Cursor)` 输出通道。
 
 #### 打包 VSIX
 1) 生成 VSIX
@@ -90,14 +105,15 @@ cursor-android-logcat/
   └─ .vscodeignore              # VSIX 体积优化
 ```
 
-#### 兼容性处理
-- `DISABLE_SCRIPT=1`：在无 TTY 的管道环境下禁用 `script` 包装，避免 `tcgetattr/ioctl` 错误。
-- `--no-color`：脚本输出去色，保证 Webview 文本匹配与渲染稳定（后续可切换为前端 ANSI 渲染）。
+#### 兼容性与脚本增强
+- `DISABLE_SCRIPT=1`：在无 TTY 的管道环境禁用 `script` 包装，避免 `tcgetattr/ioctl` 错误。
+- `--no-color`：脚本输出去色，颜色在前端按级别渲染，避免 ANSI 码导致的对齐问题。
 - 固定 `cwd`：启动脚本时将工作目录设为扩展目录，确保 `logs/` 可写。
+- 终端复位：脚本启动/退出时复位终端（`stty sane`/`tput sgr0`），避免异常退出后终端错乱；stdout 非 TTY 时强制关闭颜色，保证重定向/管道输出可读。
 
 #### 后续可做
-- ANSI 彩色渲染（xterm.js 或 ansi-to-html）。
-- 正则过滤（`--grep/--exclude`）的前端输入映射。
-- 一键清空、复制全部、导出当前视图。
+- 更丰富的语法过滤（AND/OR、`tag:xxx`、`pkg:xxx` 等表达式）与高亮。
+- 列对齐与字段高亮（时间、PID/TID、TAG 列的定宽布局）。
+- 导出当前视图、复制全部、正则过滤等增强功能。
 
 

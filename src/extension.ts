@@ -96,6 +96,23 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           this.autoStartIfPossible();
           break;
         }
+        case 'requestHistory': {
+          const serial = String(msg.serial || '').trim();
+          if (!serial) {
+            this.post({ type: 'status', text: '请先选择设备' });
+            break;
+          }
+          this.post({ type: 'status', text: '正在加载历史日志...' });
+          this.dumpHistory(serial, 10000)
+            .then((text) => {
+              this.post({ type: 'historyDump', text });
+              this.post({ type: 'status', text: '历史日志已加载' });
+            })
+            .catch(() => {
+              this.post({ type: 'status', text: '加载历史日志失败' });
+            });
+          break;
+        }
         case 'clear': {
           // 清空后端缓冲，不终止进程
           this.bufferedWhileHidden = "";
@@ -350,6 +367,25 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       clearTimeout(this.appendFlushTimer);
       this.appendFlushTimer = null;
     }
+  }
+
+  private async dumpHistory(serial: string, maxLines: number = 5000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const args = ['-s', serial, 'logcat', '-d', '-b', 'all', '-v', 'time', '-t', String(maxLines)];
+      this.debugLog('dumpHistory adb', args.join(' '));
+      const proc = spawn('adb', args);
+      const chunks: Buffer[] = [];
+      proc.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+      proc.stderr.on('data', (d) => chunks.push(Buffer.from(d)));
+      proc.on('close', () => {
+        try {
+          resolve(Buffer.concat(chunks).toString());
+        } catch {
+          reject(new Error('concat failed'));
+        }
+      });
+      proc.on('error', () => reject(new Error('spawn failed')));
+    });
   }
 
   private stopProcess() {

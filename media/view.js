@@ -254,6 +254,10 @@ filterInput.addEventListener('input', (e) => {
   filterText = String(e.target.value || '');
   try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
   scheduleRebuild();
+  // 若当前 backlog 为空，尝试从设备拉取历史日志供过滤
+  if (!backlogText) {
+    vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
+  }
 });
 matchCaseBtn.addEventListener('click', () => {
   matchCase = !matchCase;
@@ -303,5 +307,14 @@ window.addEventListener('load', () => {
       scheduleRebuild();
     }
   } catch(e){}
+});
+
+// 接收后端下发的历史日志转储
+window.addEventListener('message', (e) => {
+  const msg = e.data;
+  if (msg && msg.type === 'historyDump') {
+    backlogText = msg.text || '';
+    scheduleRebuild();
+  }
 });
 

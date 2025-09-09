@@ -71,6 +71,8 @@ class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         }
         // 设备列表刷新：放在微任务后异步执行，不阻塞 UI 首帧
         queueMicrotask(() => this.refreshDevicesAsync());
+        // 通知前端已重新可见，便于拉取历史
+        this.post({ type: 'visible' });
       } else {
         // 切换为不可见：将尚未发送的聚合数据并入隐藏缓冲，取消定时器
         if (this.pendingAppend.length > 0) {

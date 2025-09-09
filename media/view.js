@@ -24,6 +24,9 @@ let backlogText = '';
 let filterText = '';
 let matchCase = false;
 let rebuildScheduled = false;
+// 解析后的过滤表达式：OR 的每项是 AND 词数组
+let filterAst = null; // Array<Array<string>> | null
+let historyLoaded = false;
 // 颜色渲染：转义与按行着色
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
@@ -117,6 +120,7 @@ function clearLog(){
   queuedAppend = '';
   flushScheduled = false;
   backlogText = '';
+  historyLoaded = false;
   // 重置跟随状态并滚动到底部（空内容即顶部）
   autoFollow = true;
   logEl.scrollTop = logEl.scrollHeight;
@@ -125,7 +129,7 @@ function clearLog(){
   // 通知后端清空其缓冲
   vscode.postMessage({ type: 'clear' });
 }
-function setDevices(devs){
+function setDevices(devs, defaultSerial){
   deviceSel.innerHTML = '';
   if (!devs || devs.length === 0) {
     const opt = document.createElement('option');
@@ -140,6 +144,14 @@ function setDevices(devs){
     opt.textContent = d.model ? (d.serial + ' (' + d.model + ')') : d.serial;
     deviceSel.appendChild(opt);
   }
+  if (defaultSerial) {
+    try { deviceSel.value = defaultSerial; } catch(e){}
+  }
+  // 切回面板后设备列表到位：若尚未加载历史，则拉取一次
+  if (!historyLoaded && deviceSel.value) {
+    dlog('[history] request after devices');
+    vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
+  }
 }
 
 window.addEventListener('message', (e) => {
@@ -147,8 +159,15 @@ window.addEventListener('message', (e) => {
   switch(msg.type){
     case 'status': setStatus(msg.text); break;
     case 'append': append(msg.text); break;
-    case 'devices': setDevices(msg.devices); break;
+    case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
     case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
+    case 'visible':
+      // 面板重新可见：若还没有缓存，则尝试拉取一次历史
+      if (!historyLoaded && deviceSel.value) {
+        dlog('[history] request on visible');
+        vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
+      }
+      break;
   }
 });
 
@@ -157,6 +176,16 @@ deviceSel.addEventListener('click', () => {
   if (deviceSel.options.length === 1 && deviceSel.options[0].value === '') {
     dlog('[devices] click -> refresh');
     vscode.postMessage({ type: 'refreshDevices' });
+  }
+});
+deviceSel.addEventListener('change', () => {
+  // 用户切换设备：清空显示并拉取该设备历史
+  backlogText = '';
+  logEl.innerHTML = '';
+  historyLoaded = false;
+  if (deviceSel.value) {
+    dlog('[history] request on device change');
+    vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
 });
 // 监听日志区域滚动：离开底部则停止跟随，回到底部则恢复跟随
@@ -232,14 +261,13 @@ function scheduleRebuild(){
   });
 }
 function filterTextChunk(text){
-  if (!filterText) return text;
+  if (!filterText || !filterAst || filterAst.length === 0) return text;
   const lines = text.split(/\r?\n/);
-  const needle = matchCase ? filterText : filterText.toLowerCase();
   let out = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const hay = matchCase ? line : line.toLowerCase();
-    if (hay.indexOf(needle) !== -1) {
+    if (lineMatchesAst(hay)) {
       out += line;
       if (i < lines.length - 1) out += '\n';
     } else {
@@ -250,8 +278,34 @@ function filterTextChunk(text){
   }
   return out;
 }
+function lineMatchesAst(hay){
+  // OR 组：任一组满足（组内为 AND）
+  for (let gi = 0; gi < filterAst.length; gi++){
+    const andTerms = filterAst[gi];
+    let all = true;
+    for (let ti = 0; ti < andTerms.length; ti++){
+      if (hay.indexOf(andTerms[ti]) === -1) { all = false; break; }
+    }
+    if (all) return true;
+  }
+  return false;
+}
+function compileFilterAst(raw){
+  if (!raw) { filterAst = null; return; }
+  const src = matchCase ? raw : raw.toLowerCase();
+  const orParts = src.split('|');
+  const ast = [];
+  for (let i = 0; i < orParts.length; i++){
+    const part = orParts[i].trim();
+    if (!part) continue;
+    const andTerms = part.split(/\s+/).filter(Boolean);
+    if (andTerms.length > 0) ast.push(andTerms);
+  }
+  filterAst = ast.length > 0 ? ast : null;
+}
 filterInput.addEventListener('input', (e) => {
   filterText = String(e.target.value || '');
+  compileFilterAst(filterText);
   try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
   scheduleRebuild();
   // 若当前 backlog 为空，尝试从设备拉取历史日志供过滤
@@ -262,6 +316,8 @@ filterInput.addEventListener('input', (e) => {
 matchCaseBtn.addEventListener('click', () => {
   matchCase = !matchCase;
   matchCaseBtn.classList.toggle('on', matchCase);
+  // 大小写变化会影响编译
+  compileFilterAst(filterText);
   try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
   scheduleRebuild();
 });
@@ -294,6 +350,7 @@ window.addEventListener('load', () => {
       if (typeof st.filterText === 'string') {
         filterText = st.filterText;
         filterInput.value = st.filterText;
+        compileFilterAst(filterText);
       }
       if (typeof st.matchCase === 'boolean') {
         matchCase = !!st.matchCase;
@@ -314,6 +371,7 @@ window.addEventListener('message', (e) => {
   const msg = e.data;
   if (msg && msg.type === 'historyDump') {
     backlogText = msg.text || '';
+    historyLoaded = true;
     scheduleRebuild();
   }
 });

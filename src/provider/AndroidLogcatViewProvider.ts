@@ -1,0 +1,236 @@
+import * as vscode from 'vscode';
+import { loadWebviewHtml } from '../utils/html';
+import { dumpHistory as adbDumpHistory, listDevices as adbListDevices, DeviceInfo } from '../utils/adb';
+import { ProcessManager } from '../core/processManager';
+import { getLastConfig, setLastConfig, LastConfig } from '../state/configStore';
+import { IncomingWebviewMessage } from '../types/messages';
+
+export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewId = 'android-logcat-view';
+  private static readonly LAST_KEY = 'lastConfig.v1';
+
+  private view?: vscode.WebviewView;
+  private isRefreshingDevices = false;
+  private hasAutoStarted = false;
+  private output: vscode.OutputChannel;
+  private debugEnabled: boolean;
+  private proc: ProcessManager;
+
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.output = vscode.window.createOutputChannel('Android Logcat (Cursor)');
+    this.debugEnabled = !!vscode.workspace.getConfiguration('cursorAndroidLogcat').get('debug');
+    this.proc = new ProcessManager(
+      context,
+      (text) => this.post({ type: 'append', text }),
+      (text) => this.post({ type: 'status', text }),
+      () => !!this.view?.visible,
+      (...p) => this.debugLog(...p)
+    );
+  }
+
+  private debugLog(...parts: any[]) {
+    if (!this.debugEnabled) return;
+    try {
+      const text = parts.map((p) => {
+        if (typeof p === 'string') return p;
+        try { return JSON.stringify(p); } catch { return String(p); }
+      }).join(' ');
+      this.output.appendLine(`[debug] ${text}`);
+    } catch {
+      // ignore logging errors
+    }
+  }
+
+  resolveWebviewView(webviewView: vscode.WebviewView) {
+    this.view = webviewView;
+    this.debugLog('resolveWebviewView');
+    webviewView.webview.options = { enableScripts: true, retainContextWhenHidden: true } as any;
+    webviewView.webview.html = loadWebviewHtml(this.context);
+
+    const cfgDisp = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('cursorAndroidLogcat.debug')) {
+        this.debugEnabled = !!vscode.workspace.getConfiguration('cursorAndroidLogcat').get('debug');
+        this.debugLog('config changed: debug =', this.debugEnabled);
+        this.post({ type: 'debug', enabled: this.debugEnabled });
+      }
+    });
+    this.context.subscriptions.push(cfgDisp);
+
+    webviewView.onDidChangeVisibility(async () => {
+      this.debugLog('onDidChangeVisibility', { visible: webviewView.visible });
+      if (webviewView.visible) {
+        this.proc.onVisible();
+        queueMicrotask(() => this.refreshDevicesAsync());
+        this.post({ type: 'visible' });
+      } else {
+        this.proc.onHidden();
+      }
+    });
+
+    webviewView.onDidDispose(() => {
+      this.debugLog('onDidDispose');
+      this.stopProcess();
+    });
+
+    webviewView.webview.onDidReceiveMessage(async (msg: IncomingWebviewMessage) => {
+      if (msg?.type) this.debugLog('onDidReceiveMessage', msg.type);
+      switch (msg.type) {
+        case 'ready': {
+          this.post({ type: 'debug', enabled: this.debugEnabled });
+          this.refreshDevicesAsync();
+          this.postLastConfigToWebview();
+          this.autoStartIfPossible();
+          break;
+        }
+        case 'requestHistory': {
+          const serial = String(msg.serial || '').trim();
+          if (!serial) {
+            this.post({ type: 'status', text: '请先选择设备' });
+            break;
+          }
+          this.post({ type: 'status', text: '正在加载历史日志...' });
+          this.dumpHistory(serial, 10000)
+            .then((text) => {
+              this.post({ type: 'historyDump', text });
+              this.post({ type: 'status', text: '历史日志已加载' });
+            })
+            .catch(() => {
+              this.post({ type: 'status', text: '加载历史日志失败' });
+            });
+          break;
+        }
+        case 'clear': {
+          this.proc.clearBuffers();
+          this.post({ type: 'status', text: '已清空（仅UI与缓冲）' });
+          this.debugLog('cleared buffers');
+          break;
+        }
+        case 'refreshDevices': {
+          this.debugLog('refreshDevices');
+          this.refreshDevicesAsync();
+          break;
+        }
+        case 'start': {
+          if (!this.proc.isRunning()) {
+            const m = msg as any;
+            if (!m.serial) {
+              this.post({ type: 'status', text: '请先选择设备' });
+              return;
+            }
+            this.debugLog('startProcess by user', { serial: m.serial, pkg: m.pkg, tag: m.tag, level: m.level, buffer: m.buffer, save: !!m.save });
+            this.proc.start({
+              serial: m.serial,
+              pkg: m.pkg || '',
+              tag: m.tag || '*',
+              level: m.level || 'D',
+              buffer: m.buffer || 'main',
+              save: !!m.save,
+            });
+            this.setLastConfig({
+              serial: m.serial,
+              pkg: m.pkg || '',
+              tag: m.tag || '*',
+              level: m.level || 'D',
+              buffer: m.buffer || 'main',
+              save: !!m.save,
+            });
+          } else if (this.proc.isPaused()) {
+            this.proc.resume();
+          } else {
+            this.post({ type: 'status', text: '已在运行中' });
+          }
+          break;
+        }
+        case 'stop': {
+          this.proc.stop();
+          break;
+        }
+        case 'pause': {
+          this.proc.pause();
+          break;
+        }
+      }
+    });
+  }
+
+  private refreshDevicesAsync() {
+    if (this.isRefreshingDevices) return;
+    this.isRefreshingDevices = true;
+    this.debugLog('listDevices:start');
+    this.listDevices()
+      .then((devices) => {
+        const last = this.getLastConfig();
+        this.post({ type: 'devices', devices, defaultSerial: last?.serial ?? '' });
+        this.debugLog('listDevices:found', devices?.length ?? 0);
+      })
+      .finally(() => {
+        this.isRefreshingDevices = false;
+        this.debugLog('listDevices:done');
+      });
+  }
+
+  private getLastConfig(): { serial: string; pkg: string; tag: string; level: string; buffer: string; save: boolean } | null {
+    return getLastConfig(this.context);
+  }
+
+  private setLastConfig(cfg: { serial: string; pkg: string; tag: string; level: string; buffer: string; save: boolean }) {
+    setLastConfig(this.context, cfg as LastConfig);
+  }
+
+  private postLastConfigToWebview() {
+    const last = this.getLastConfig();
+    if (last) {
+      this.post({ type: 'config', config: last });
+      this.debugLog('post config', last);
+    }
+  }
+
+  private async autoStartIfPossible() {
+    if (this.hasAutoStarted || this.proc.isRunning()) return;
+    this.debugLog('autoStartIfPossible:checking');
+    const devices = await this.listDevices();
+    if (!devices || devices.length === 0) {
+      this.post({ type: 'status', text: '未检测到设备，自动启动跳过' });
+      this.debugLog('autoStartIfPossible:no devices');
+      return;
+    }
+    const last = this.getLastConfig();
+    let targetSerial = last?.serial as string | undefined;
+    if (!targetSerial || !devices.find(d => d.serial === targetSerial)) {
+      targetSerial = devices[0].serial;
+    }
+    const startCfg = {
+      serial: targetSerial!,
+      pkg: last?.pkg ?? '',
+      tag: last?.tag ?? '*',
+      level: last?.level ?? 'D',
+      buffer: last?.buffer ?? 'main',
+      save: last?.save ?? false,
+    };
+    this.debugLog('autoStartIfPossible:start', startCfg);
+    this.proc.start(startCfg);
+    this.setLastConfig(startCfg);
+    this.hasAutoStarted = true;
+  }
+
+  private post(message: any) {
+    if (this.debugEnabled && message && message.type && message.type !== 'append') {
+      this.debugLog('post -> webview', message.type);
+    }
+    this.view?.webview.postMessage(message);
+  }
+
+  // 进程与缓冲逻辑下沉到 ProcessManager
+
+  private dumpHistory(serial: string, maxLines: number = 5000): Promise<string> {
+    return adbDumpHistory(serial, maxLines);
+  }
+
+  private stopProcess() { this.proc.stop(); }
+
+  private listDevices(): Promise<DeviceInfo[]> {
+    return adbListDevices();
+  }
+}
+
+

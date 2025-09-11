@@ -60,8 +60,9 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       this.debugLog('onDidChangeVisibility', { visible: webviewView.visible });
       if (webviewView.visible) {
         this.proc.onVisible();
-        queueMicrotask(() => this.refreshDevicesAsync());
+        // 避免频繁刷新：先让前端根据其缓存自行恢复，再异步刷新设备
         this.post({ type: 'visible' });
+        queueMicrotask(() => this.refreshDevicesAsync());
       } else {
         this.proc.onHidden();
       }

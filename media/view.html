@@ -10,12 +10,12 @@
 <body>
   <div class="row top-controls">
     <select id="device"></select>
-    <label style="display:flex;align-items:center;gap:4px;">
-      <input id="save" type="checkbox" /> 保存到文件
-    </label>
     <div class="filter">
       <input id="filter" placeholder="Press ^Space to see suggestions" />
-      <button id="matchCase" title="Match case">Cc</button>
+      <button id="matchCase" class="btn btn-toggle" title="区分大小写" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14v2H5V4zm5 4h4v2h-4V8zM3 12h18v2H3v-2zm8 4h2v4h-2v-4z"/></svg>
+        <span class="label">Cc</span>
+      </button>
     </div>
   </div>
   <div class="row-status">
@@ -23,10 +23,19 @@
   </div>
   <div class="main">
     <div class="sidebar">
-      <button id="toggle">暂停</button>
-      <button id="clear">清空</button>
-      <label style="display:flex;align-items:center;gap:6px;justify-content:center;">
-        <input id="softWrap" type="checkbox" /> Sp
+      <button id="toggle" class="btn btn-primary" aria-label="暂停" title="暂停">
+        <svg id="iconPause" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
+        <svg id="iconPlay" class="hidden" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+        <span id="toggleLabel" class="label">暂停</span>
+      </button>
+      <button id="clear" class="btn btn-danger" aria-label="清空" title="清空">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>
+        <span class="label">清空</span>
+      </button>
+      <label class="switch" title="软换行">
+        <input id="softWrap" type="checkbox" />
+        <span class="slider" aria-hidden="true"></span>
+        <span class="switch-label">Sp</span>
       </label>
     </div>
     <div class="content">

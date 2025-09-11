@@ -1,30 +1,299 @@
-html, body { height: 100%; overflow: hidden; }
-body { font-family: var(--vscode-font-family); padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-.top-controls { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: center; }
-.top-controls .filter { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
-.top-controls .filter input { width: 100%; min-width: 360px; }
-.top-controls .filter button { width: 28px; }
-.main { display: grid; grid-template-columns: 50px 1fr; gap: 8px; min-height: 0; flex: 1; }
-.sidebar { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
-.sidebar button { width: 50px; }
-.content { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; min-height: 0; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.row-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-label { font-size: 12px; }
-.row input:not([type="checkbox"]), .row select { height: 25px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, #2a2a2a); border-radius: 6px; padding: 0 8px; }
-.row input:not([type="checkbox"]):focus, .row select:focus { outline: none; border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 1px var(--vscode-focusBorder) inset; }
-.row input:not([type="checkbox"])::placeholder { color: var(--vscode-input-placeholderForeground); }
-.row select { padding-right: 25px; }
-button { height: 25px; }
-#log { white-space: pre; font-family: var(--vscode-editor-font-family, monospace); background: #181818; color: var(--vscode-editor-foreground); padding: 8px; border: 1px solid #181818; flex: 1; overflow: auto; min-height: 0; }
-#log.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
-/* log level colors */
-.lv-v { color: #7f8c8d; }
-.lv-d { color: #bdc3c7; }
-.lv-i { color: #2ecc71; }
-.lv-w { color: #f1c40f; }
-.lv-e { color: #e74c3c; }
-.lv-f { color: #9b59b6; }
-.lv-s { color: #1abc9c; }
-#status { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0 0 4px 0; font-family: var(--vscode-editor-font-family, monospace); }
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
 
+body {
+  font-family: var(--vscode-font-family);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.top-controls {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.top-controls .filter {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.top-controls .filter input {
+  width: 100%;
+  min-width: 420px;
+  height: 28px;
+}
+
+.top-controls .filter button {
+  width: auto;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.sidebar button {
+  width: 100%;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+label {
+  font-size: 12px;
+}
+
+.row input:not([type="checkbox"]), .row select {
+  height: 25px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, #2a2a2a);
+  border-radius: 6px;
+  padding: 0 8px;
+}
+
+.row input:not([type="checkbox"]):focus, .row select:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder) inset;
+}
+
+.row input:not([type="checkbox"])::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.row select {
+  padding-right: 25px;
+}
+
+button {
+  height: 28px;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 60ms ease;
+}
+
+.btn:hover {
+  background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 86%, white);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.btn .label {
+  font-size: 12px;
+}
+
+.btn svg {
+  display: inline-block;
+}
+
+.btn .hidden {
+  display: none;
+}
+
+.btn-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--vscode-button-background) 86%, white);
+}
+
+.btn-danger {
+  background: var(--vscode-errorForeground);
+  color: #fff;
+  border-color: rgba(0,0,0,0.15);
+}
+
+.btn-danger:hover {
+  filter: brightness(1.05);
+}
+
+/* Toggle button (Cc) */
+.btn-toggle {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  height: 28px;
+  padding: 0 8px;
+  min-width: 44px;
+}
+
+.btn-toggle[aria-pressed="true"] {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: transparent;
+}
+
+.btn-toggle[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--vscode-button-background) 86%, white);
+}
+
+/* Custom switch (Sp) */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 0;
+  height: 0;
+  position: absolute;
+  opacity: 0;
+}
+
+.switch .slider {
+  width: 32px;
+  height: 18px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, #2a2a2a);
+  border-radius: 999px;
+  position: relative;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.switch .slider::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  background: var(--vscode-button-foreground);
+  border-radius: 50%;
+  transition: transform 120ms ease;
+}
+
+.switch input:checked + .slider {
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-button-background);
+}
+
+.switch input:checked + .slider::after {
+  transform: translateX(14px);
+  background: var(--vscode-button-foreground);
+}
+
+.switch .switch-label {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Log area */
+#log {
+  white-space: pre;
+  font-family: var(--vscode-editor-font-family, monospace);
+  background: #181818;
+  color: var(--vscode-editor-foreground);
+  padding: 8px;
+  border: 1px solid #181818;
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+#log.wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* log level colors */
+.lv-v {
+  color: #7f8c8d;
+}
+
+.lv-d {
+  color: #bdc3c7;
+}
+
+.lv-i {
+  color: #2ecc71;
+}
+
+.lv-w {
+  color: #f1c40f;
+}
+
+.lv-e {
+  color: #e74c3c;
+}
+
+.lv-f {
+  color: #9b59b6;
+}
+
+.lv-s {
+  color: #1abc9c;
+}
+
+#status {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  margin: 0 0 4px 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+}

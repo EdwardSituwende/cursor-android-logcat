@@ -14,12 +14,28 @@ function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments)
 
 function setStatus(t){ statusEl.textContent = t; }
 
+function applyPausedStateFromStatus(statusText){
+  try {
+    if (typeof statusText !== 'string') return;
+    if (statusText.indexOf('已暂停') !== -1 || statusText.indexOf('立即暂停') !== -1) {
+      uiPaused = true;
+      setToggleUi(true);
+      return;
+    }
+    if (statusText.indexOf('已恢复') !== -1 || statusText.indexOf('启动:') !== -1) {
+      uiPaused = false;
+      setToggleUi(false);
+      return;
+    }
+  } catch(e){}
+}
 // 当用户停留在底部时才自动跟随到底，否则保持用户当前位置
 let autoFollow = true;
 let pendingWhileNotFollowing = '';
 let queuedAppend = '';
 let flushScheduled = false;
 const MAX_LOG_TEXT_LENGTH = 2_000_000; // 最多约 2MB 文本，超过则从头部裁剪
+const STATE_MAX_TEXT_LENGTH = 800_000; // 状态存储的最大文本长度（避免过大占用）
 let backlogText = '';
 let filterText = '';
 let matchCase = false;
@@ -27,6 +43,7 @@ let rebuildScheduled = false;
 // 解析后的过滤表达式：OR 的每项是 AND 词数组
 let filterAst = null; // Array<Array<string>> | null
 let historyLoaded = false;
+let saveStateScheduled = false;
 // 颜色渲染：转义与按行着色
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
@@ -98,6 +115,8 @@ function scheduleFlush(){
       const text = filterText ? filterTextChunk(backlogText) : backlogText;
       logEl.innerHTML = renderHtmlFromText(text);
     }
+    // 持久化前端状态
+    scheduleSaveState();
     if (stick) {
       logEl.scrollTop = logEl.scrollHeight;
     }
@@ -131,6 +150,8 @@ function clearLog(){
   dlog('[click] clear');
   // 通知后端清空其缓冲
   vscode.postMessage({ type: 'clear' });
+  // 持久化前端状态
+  scheduleSaveState();
 }
 function setDevices(devs, defaultSerial){
   deviceSel.innerHTML = '';
@@ -150,6 +171,15 @@ function setDevices(devs, defaultSerial){
   if (defaultSerial) {
     try { deviceSel.value = defaultSerial; } catch(e){}
   }
+  // 若状态中保存过设备，优先恢复该选择
+  try {
+    const st = vscode.getState && vscode.getState();
+    if (st && st.device) {
+      try { deviceSel.value = st.device; } catch(e){}
+    }
+  } catch(e){}
+  // 设备选择也持久化一次
+  scheduleSaveState();
   // 切回面板后设备列表到位：若尚未加载历史，则拉取一次
   if (!historyLoaded && deviceSel.value) {
     dlog('[history] request after devices');
@@ -160,7 +190,7 @@ function setDevices(devs, defaultSerial){
 window.addEventListener('message', (e) => {
   const msg = e.data;
   switch(msg.type){
-    case 'status': setStatus(msg.text); break;
+    case 'status': setStatus(msg.text); applyPausedStateFromStatus(msg.text); break;
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
     case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
@@ -190,6 +220,7 @@ deviceSel.addEventListener('change', () => {
     dlog('[history] request on device change');
     vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
+  scheduleSaveState();
 });
 // 监听日志区域滚动：离开底部则停止跟随，回到底部则恢复跟随
 logEl.addEventListener('scroll', () => {
@@ -223,23 +254,40 @@ window.addEventListener('keydown', (e) => {
 });
 
 let uiPaused = false; // 仅用于按钮文字切换
+function setToggleUi(paused){
+  const iconPause = document.getElementById('iconPause');
+  const iconPlay = document.getElementById('iconPlay');
+  const toggleLabel = document.getElementById('toggleLabel');
+  if (paused) {
+    if (iconPause) iconPause.classList.add('hidden');
+    if (iconPlay) iconPlay.classList.remove('hidden');
+    if (toggleLabel) toggleLabel.textContent = '恢复';
+    toggleBtn.setAttribute('aria-label', '恢复');
+    toggleBtn.setAttribute('title', '恢复');
+  } else {
+    if (iconPause) iconPause.classList.remove('hidden');
+    if (iconPlay) iconPlay.classList.add('hidden');
+    if (toggleLabel) toggleLabel.textContent = '暂停';
+    toggleBtn.setAttribute('aria-label', '暂停');
+    toggleBtn.setAttribute('title', '暂停');
+  }
+}
+
 toggleBtn.addEventListener('click', () => {
   if (uiPaused) {
     // 恢复
     vscode.postMessage({
       type: 'start',
       serial: deviceSel.value,
-      save: document.getElementById('save').checked,
+      // save option removed
     });
     dlog('[click] resume');
-    toggleBtn.textContent = '暂停';
-    uiPaused = false;
+    // 实际文案切换在收到“已恢复/启动”状态后处理
   } else {
     // 暂停
     vscode.postMessage({ type: 'pause' });
     dlog('[click] pause');
-    toggleBtn.textContent = '恢复';
-    uiPaused = true;
+    // 实际文案切换在收到“已暂停”状态后处理
   }
 });
 
@@ -306,10 +354,33 @@ function compileFilterAst(raw){
   }
   filterAst = ast.length > 0 ? ast : null;
 }
+function scheduleSaveState(){
+  if (saveStateScheduled) return;
+  saveStateScheduled = true;
+  requestAnimationFrame(() => {
+    saveStateScheduled = false;
+    try {
+      let textForState = backlogText || '';
+      if (textForState.length > STATE_MAX_TEXT_LENGTH) {
+        textForState = textForState.slice(textForState.length - STATE_MAX_TEXT_LENGTH);
+      }
+      const softWrap = !!(softWrapChk && softWrapChk.checked);
+      const device = (deviceSel && deviceSel.value) ? deviceSel.value : '';
+      vscode.setState({
+        filterText: filterText,
+        matchCase: matchCase,
+        softWrap: softWrap,
+        device: device,
+        historyLoaded: !!historyLoaded,
+        backlogText: textForState,
+      });
+    } catch(e){}
+  });
+}
 filterInput.addEventListener('input', (e) => {
   filterText = String(e.target.value || '');
   compileFilterAst(filterText);
-  try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
+  scheduleSaveState();
   scheduleRebuild();
   // 若当前 backlog 为空，尝试从设备拉取历史日志供过滤
   if (!backlogText) {
@@ -319,9 +390,10 @@ filterInput.addEventListener('input', (e) => {
 matchCaseBtn.addEventListener('click', () => {
   matchCase = !matchCase;
   matchCaseBtn.classList.toggle('on', matchCase);
+  matchCaseBtn.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
   // 大小写变化会影响编译
   compileFilterAst(filterText);
-  try { vscode.setState({ filterText: filterText, matchCase: matchCase }); } catch(e){}
+  scheduleSaveState();
   scheduleRebuild();
 });
 
@@ -332,20 +404,12 @@ softWrapChk.addEventListener('change', () => {
   } else {
     logEl.classList.remove('wrap');
   }
-  try {
-    const st = vscode.getState && vscode.getState();
-    vscode.setState({
-      filterText: filterText,
-      matchCase: matchCase,
-      softWrap: !!softWrapChk.checked,
-    });
-  } catch(e){}
+  scheduleSaveState();
 });
 
 vscode.postMessage({ type: 'ready' });
 // 首帧：避免扩展后台自动启动时按钮文字状态与真实状态不一致
 window.addEventListener('load', () => {
-  toggleBtn.textContent = uiPaused ? '恢复' : '暂停';
   // 恢复过滤器状态
   try {
     const st = vscode.getState && vscode.getState();
@@ -358,15 +422,22 @@ window.addEventListener('load', () => {
       if (typeof st.matchCase === 'boolean') {
         matchCase = !!st.matchCase;
         matchCaseBtn.classList.toggle('on', matchCase);
+        matchCaseBtn.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
       }
       if (typeof st.softWrap === 'boolean') {
         softWrapChk.checked = !!st.softWrap;
         if (softWrapChk.checked) logEl.classList.add('wrap');
       }
+      if (typeof st.backlogText === 'string' && st.backlogText) {
+        backlogText = st.backlogText;
+        historyLoaded = !!st.historyLoaded || true;
+      }
       // 初次进入根据状态重建视图
       scheduleRebuild();
     }
   } catch(e){}
+  // 初始化切换按钮 UI（默认显示“暂停”）
+  setToggleUi(uiPaused);
 });
 
 // 接收后端下发的历史日志转储

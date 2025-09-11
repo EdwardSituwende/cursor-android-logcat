@@ -2,18 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Extension",
+      "name": "Run Extension (isolated)",
       "type": "extensionHost",
       "request": "launch",
-      "runtimeExecutable": "${execPath}",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}"
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extensions"
       ],
-      "outFiles": [
-        "${workspaceFolder}/out/**/*.js"
-      ],
-      "preLaunchTask": "npm: compile"
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "runtimeExecutable": null
     }
   ]
 }
-

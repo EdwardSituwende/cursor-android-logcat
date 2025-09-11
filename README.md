@@ -3,6 +3,7 @@
 ### android-logcat（Cursor、Trace 插件）
 
 为 Cursor、Trace 打造的一个轻量且实用的 Android Logcat 面板插件。在底部 Toggle Panel 中提供 “android logcat” 标签页，支持设备选择、实时过滤、大小写匹配、软换行、暂停/恢复、清空日志、按级别着色，以及将日志保存到文件。
+![](https://cdn.jsdelivr.net/gh/EdwardSituwende/note_img/note/202509111636899.png)
 
 #### 架构概览
 

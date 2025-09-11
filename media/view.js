@@ -32,13 +32,16 @@ function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
 }
 function detectLevel(line){
-  // 典型格式：日期 时间 PID TID L TAG: message
-  // 在空格分隔的 token 里找第一个是 V/D/I/W/E/F/S 的单字母
-  const tokens = line.trim().split(/\s+/);
-  for (let i = 0; i < tokens.length; i++){
-    const t = tokens[i];
-    if (t.length === 1 && /[VDIWEFS]/.test(t)) return t.toLowerCase();
-  }
+  // 兼容多种 logcat 输出格式：
+  // 1) time:  09-09 10:25:55.407  PID TID  W  TAG: msg
+  // 2) brief: W/TAG( PID ): msg
+  // 3) threadtime 等其它变体
+  // 优先匹配 “<level>/<tag>”
+  let m = line.match(/(?:^|\s)([VDIWEFS])\/[\w$.:-]+/);
+  if (m && m[1]) return m[1].toLowerCase();
+  // 回退：匹配独立的单字母 level token（周围为空白）
+  m = line.match(/(?:^|\s)([VDIWEFS])(?:\s|$)/);
+  if (m && m[1]) return m[1].toLowerCase();
   return '';
 }
 function renderHtmlFromText(text){

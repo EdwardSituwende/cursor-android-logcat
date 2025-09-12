@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { loadWebviewHtml } from '../utils/html';
 import { dumpHistory as adbDumpHistory, listDevices as adbListDevices, DeviceInfo } from '../utils/adb';
 import { ProcessManager } from '../core/processManager';
@@ -73,7 +75,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       this.stopProcess();
     });
 
-    webviewView.webview.onDidReceiveMessage(async (msg: IncomingWebviewMessage) => {
+    webviewView.webview.onDidReceiveMessage(async (msg: any) => {
       if (msg?.type) this.debugLog('onDidReceiveMessage', msg.type);
       switch (msg.type) {
         case 'ready': {
@@ -109,6 +111,22 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         case 'refreshDevices': {
           this.debugLog('refreshDevices');
           this.refreshDevicesAsync();
+          break;
+        }
+        case 'selectDevice': {
+          const serial = String(msg.serial || '').trim();
+          if (!serial) {
+            this.post({ type: 'status', text: '请先选择设备' });
+            break;
+          }
+          if (this.proc.isRunning()) {
+            this.proc.stop();
+          }
+          const last = this.getLastConfig() || { serial: '', pkg: '', tag: '*', level: 'D', buffer: 'main', save: false };
+          const startCfg = { serial, pkg: last.pkg, tag: last.tag, level: last.level, buffer: last.buffer, save: last.save };
+          this.debugLog('selectDevice -> start', startCfg);
+          this.proc.start(startCfg);
+          this.setLastConfig(startCfg);
           break;
         }
         case 'start': {
@@ -148,6 +166,30 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'pause': {
           this.proc.pause();
+          break;
+        }
+        case 'exportLogs': {
+          const plainText: string = String(msg.text || '');
+          const suggested: string = String(msg.suggested || 'AndroidLog.txt');
+          try {
+            this.post({ type: 'status', text: '正在准备导出...' });
+            const defaultPath = path.join(os.homedir(), 'Desktop', suggested);
+            const uri = await vscode.window.showSaveDialog({
+              title: 'Export Logs to a File',
+              defaultUri: vscode.Uri.file(defaultPath),
+              filters: { Text: ['txt'], 'All Files': ['*'] },
+              saveLabel: 'Save',
+            });
+            if (!uri) {
+              this.post({ type: 'status', text: '已取消导出' });
+              break;
+            }
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(plainText, 'utf8'));
+            this.post({ type: 'status', text: '已导出日志: ' + uri.fsPath });
+          } catch (e) {
+            this.post({ type: 'status', text: '导出失败' });
+            this.debugLog('export error', String(e));
+          }
           break;
         }
       }

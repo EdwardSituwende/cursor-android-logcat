@@ -32,11 +32,19 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>
         <span class="label">清空</span>
       </button>
+      <button id="export" class="btn" aria-label="导出日志" title="Export logs to a file">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM12 2l5 5h-3v6h-4V7H7l5-5z"/></svg>
+        <span class="label">导出</span>
+      </button>
       <label class="switch" title="软换行">
         <input id="softWrap" type="checkbox" />
         <span class="slider" aria-hidden="true"></span>
         <span class="switch-label">Sp</span>
       </label>
+      <button id="scrollEnd" class="btn" aria-label="滚动到底部" title="Scroll to the End">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5H7zM5 18h14v2H5z"/></svg>
+        <span class="label">到底</span>
+      </button>
     </div>
     <div class="content">
       <div id="log"></div>

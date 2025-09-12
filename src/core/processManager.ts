@@ -16,6 +16,9 @@ export class ProcessManager {
   private readonly APPEND_FLUSH_INTERVAL_MS = 33;
   private readonly APPEND_SIZE_THRESHOLD = 64 * 1024;
 
+  private lastOpts: StartOptions | null = null;
+  private lastPid: string = '';
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly onAppend: (text: string) => void,
@@ -54,10 +57,32 @@ export class ProcessManager {
     args.push('--no-color');
     if (opts.save) args.push('-f');
 
+    this.lastOpts = opts;
+    this.lastPid = '';
+
     const cwdDir = this.context.extensionUri.fsPath;
     const proc = spawn(scriptPath, args, { env: { ...process.env, DISABLE_SCRIPT: '1' }, cwd: cwdDir });
     this.currentProc = proc;
     this.isRunningInternal = true;
+
+    // 插入类似 logcat 的缓冲区起始标记
+    const buffersToMark = this.computeBuffersToMark(opts.buffer);
+    for (const b of buffersToMark) {
+      this.onAppend('--------- beginning of ' + b + '\n');
+    }
+
+    // 若指定了包名，尝试解析 PID 并插入“PROCESS STARTED”标记
+    if (opts.pkg && opts.pkg.trim()) {
+      this.resolvePidAsync(opts.serial, opts.pkg).then((pid) => {
+        this.lastPid = pid || '';
+        const line = '---------------------------- PROCESS STARTED (' + (pid || 'unknown') + ') for package ' + opts.pkg + ' ----------------------------\n';
+        this.onAppend(line);
+      }).catch(() => {
+        const line = '---------------------------- PROCESS STARTED (unknown) for package ' + opts.pkg + ' ----------------------------\n';
+        this.onAppend(line);
+      });
+    }
+
     this.onStatus(`启动: ${scriptPath} ${args.join(' ')}`);
     this.debugLog('spawn', { scriptPath, args });
     if (this.requestedPaused) {
@@ -70,6 +95,11 @@ export class ProcessManager {
     proc.stderr.on('data', (buf) => this.handleChunk(buf.toString()));
     proc.on('close', (code, signal) => {
       this.onStatus(`已退出 (code=${code}, signal=${signal ?? ''})`);
+      // 结束标记（若有包名）
+      if (this.lastOpts && this.lastOpts.pkg) {
+        const endLine = '---------------------------- PROCESS ENDED (' + (this.lastPid || 'unknown') + ') for package ' + this.lastOpts.pkg + ' ----------------------------\n';
+        this.onAppend(endLine);
+      }
       this.debugLog('process closed', { code, signal });
       this.isRunningInternal = false;
       this.currentProc = null;
@@ -171,6 +201,28 @@ export class ProcessManager {
     const configured = cfg.get<string>('scriptPath');
     if (configured && configured.trim()) return configured;
     return path.join(this.context.extensionUri.fsPath, 'scripts', 'logcat_android', 'cli_logcat.sh');
+  }
+
+  private computeBuffersToMark(buffer: string): string[] {
+    const b = String(buffer || '').toLowerCase();
+    if (!b || b === 'main') return ['main'];
+    if (b === 'all') return ['main', 'system', 'events', 'radio'];
+    return [b];
+  }
+
+  private resolvePidAsync(serial: string, pkg: string): Promise<string> {
+    return new Promise((resolve) => {
+      const args = ['-s', serial, 'shell', 'pidof', pkg];
+      const proc = spawn('adb', args);
+      const chunks: Buffer[] = [];
+      proc.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+      proc.stderr.on('data', (d) => chunks.push(Buffer.from(d)));
+      proc.on('close', () => {
+        const out = Buffer.concat(chunks).toString().trim();
+        resolve(out || '');
+      });
+      proc.on('error', () => resolve(''));
+    });
   }
 }
 

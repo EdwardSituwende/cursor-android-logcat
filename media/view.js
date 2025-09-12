@@ -4,6 +4,8 @@ const $ = (id) => document.getElementById(id);
 const deviceSel = $('device');
 const toggleBtn = $('toggle');
 const clearBtn = $('clear');
+const exportBtn = $('export');
+const scrollEndBtn = $('scrollEnd');
 const logEl = $('log');
 const statusEl = $('status');
 const filterInput = $('filter');
@@ -153,6 +155,26 @@ function clearLog(){
   // 持久化前端状态
   scheduleSaveState();
 }
+function buildSuggestedFilename(){
+  const serial = (deviceSel && deviceSel.value) ? deviceSel.value : 'device';
+  const dt = new Date();
+  const pad = (n) => String(n).padStart(2,'0');
+  const name = 'AndroidLog-' + serial + '-' + dt.getFullYear() + pad(dt.getMonth()+1) + pad(dt.getDate()) + '-' + pad(dt.getHours()) + pad(dt.getMinutes()) + pad(dt.getSeconds()) + '.txt';
+  return name.replace(/\s+/g,'_');
+}
+function getFullLogText(){
+  // 合并 backlog + 未刷新的 queued + 未跟随期间的 pending
+  let text = backlogText || '';
+  if (queuedAppend) text += queuedAppend;
+  if (pendingWhileNotFollowing) text += pendingWhileNotFollowing;
+  return text;
+}
+function exportLogs(){
+  const text = getFullLogText();
+  if (!text) { setStatus('当前无日志可导出'); return; }
+  const suggested = buildSuggestedFilename();
+  vscode.postMessage({ type: 'exportLogs', text: text, suggested: suggested });
+}
 function setDevices(devs, defaultSerial){
   deviceSel.innerHTML = '';
   if (!devs || devs.length === 0) {
@@ -211,13 +233,15 @@ deviceSel.addEventListener('click', () => {
     vscode.postMessage({ type: 'refreshDevices' });
   }
 });
+
 deviceSel.addEventListener('change', () => {
-  // 用户切换设备：清空显示并拉取该设备历史
+  // 用户切换设备：清空显示，告知后端切换实时流，并拉取该设备历史
   backlogText = '';
   logEl.innerHTML = '';
   historyLoaded = false;
   if (deviceSel.value) {
-    dlog('[history] request on device change');
+    dlog('[device] select -> switch stream and request history');
+    vscode.postMessage({ type: 'selectDevice', serial: deviceSel.value });
     vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
   scheduleSaveState();
@@ -291,8 +315,14 @@ toggleBtn.addEventListener('click', () => {
   }
 });
 
-// 绑定清空按钮
+// 绑定清空与导出按钮
 clearBtn.addEventListener('click', clearLog);
+if (exportBtn) {
+  exportBtn.addEventListener('click', () => exportLogs());
+}
+if (scrollEndBtn) {
+  scrollEndBtn.addEventListener('click', () => enableFollowAndStick());
+}
 
 // 过滤：输入即刻应用；采用逐帧重建，避免频繁 DOM 重排
 function scheduleRebuild(){

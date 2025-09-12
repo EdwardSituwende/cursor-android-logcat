@@ -6,6 +6,7 @@ export type ReadyMessage = { type: 'ready' };
 export type RequestHistoryMessage = { type: 'requestHistory'; serial: string };
 export type ClearMessage = { type: 'clear' };
 export type RefreshDevicesMessage = { type: 'refreshDevices' };
+export type SelectDeviceMessage = { type: 'selectDevice'; serial: string };
 export type StartMessage = {
   type: 'start';
   serial: string;
@@ -17,15 +18,18 @@ export type StartMessage = {
 };
 export type PauseMessage = { type: 'pause' };
 export type StopMessage = { type: 'stop' };
+export type ExportLogsMessage = { type: 'exportLogs' };
 
 export type IncomingWebviewMessage =
   | ReadyMessage
   | RequestHistoryMessage
   | ClearMessage
   | RefreshDevicesMessage
+  | SelectDeviceMessage
   | StartMessage
   | PauseMessage
-  | StopMessage;
+  | StopMessage
+  | ExportLogsMessage;
 
 // 发送到 Webview 的出站消息
 export type AppendMessage = { type: 'append'; text: string };

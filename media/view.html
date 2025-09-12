@@ -1,56 +1,78 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="{{CSP}}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Android Logcat</title>
-  <style>/*INJECT_STYLE*/</style>
-</head>
-<body>
-  <div class="row top-controls">
-    <select id="device"></select>
-    <div class="filter">
-      <input id="filter" placeholder="Press ^Space to see suggestions" />
-      <button id="matchCase" class="btn btn-toggle" title="区分大小写" aria-pressed="false">
-        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14v2H5V4zm5 4h4v2h-4V8zM3 12h18v2H3v-2zm8 4h2v4h-2v-4z"/></svg>
-        <span class="label">Cc</span>
-      </button>
-    </div>
-  </div>
-  <div class="row-status">
-    <div id="status"></div>
-  </div>
-  <div class="main">
-    <div class="sidebar">
-      <button id="toggle" class="btn btn-primary" aria-label="暂停" title="暂停">
-        <svg id="iconPause" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
-        <svg id="iconPlay" class="hidden" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-        <span id="toggleLabel" class="label">暂停</span>
-      </button>
-      <button id="clear" class="btn btn-danger" aria-label="清空" title="清空">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>
-        <span class="label">清空</span>
-      </button>
-      <button id="export" class="btn" aria-label="导出日志" title="Export logs to a file">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM12 2l5 5h-3v6h-4V7H7l5-5z"/></svg>
-        <span class="label">导出</span>
-      </button>
-      <label class="switch" title="软换行">
-        <input id="softWrap" type="checkbox" />
-        <span class="slider" aria-hidden="true"></span>
-        <span class="switch-label">Sp</span>
-      </label>
-      <button id="scrollEnd" class="btn" aria-label="滚动到底部" title="Scroll to the End">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5H7zM5 18h14v2H5z"/></svg>
-        <span class="label">到底</span>
-      </button>
-    </div>
-    <div class="content">
-      <div id="log"></div>
-    </div>
-  </div>
-  <script nonce="{{NONCE}}">{{SCRIPT}}</script>
-</body>
-</html>
 
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="{{CSP}}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Android Logcat</title>
+    <style>
+        /*INJECT_STYLE*/
+    </style>
+</head>
+
+<body>
+    <div class="row top-controls">
+        <select id="device"></select>
+        <div class="filter">
+            <input id="filter" placeholder="Press ^Space to see suggestions" />
+            <button id="matchCase" class="btn btn-toggle" title="区分大小写" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                    <path fill="currentColor" d="M5 4h14v2H5V4zm5 4h4v2h-4V8zM3 12h18v2H3v-2zm8 4h2v4h-2v-4z" />
+                </svg>
+                <span class="label">Cc</span>
+            </button>
+        </div>
+    </div>
+    <div class="row-status">
+        <div id="status"></div>
+    </div>
+    <div class="main">
+        <div class="sidebar">
+            <button id="toggle" class="btn btn-primary" aria-label="暂停" title="暂停">
+                <svg id="iconPause" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
+                </svg>
+                <svg id="iconPlay" class="hidden" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M8 5v14l11-7z" />
+                </svg>
+                <span id="toggleLabel" class="label">暂停</span>
+            </button>
+            <button id="clear" class="btn btn-danger" aria-label="清空" title="清空">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                </svg>
+                <span class="label">清空</span>
+            </button>
+            <button id="import" class="btn" aria-label="导入日志" title="Import logs from a file">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M5 20h14v-2H5v2zM7 9l5 5 5-5h-4V4h-2v5H7z" />
+                </svg>
+                <span class="label">导入</span>
+            </button>
+            <button id="export" class="btn" aria-label="导出日志" title="Export logs to a file">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M5 20h14v-2H5v2zM12 2l5 5h-3v6h-4V7H7l5-5z" />
+                </svg>
+                <span class="label">导出</span>
+            </button>
+            <label class="switch" title="软换行">
+                <input id="softWrap" type="checkbox" />
+                <span class="slider" aria-hidden="true"></span>
+                <span class="switch-label">Sp</span>
+            </label>
+            <button id="scrollEnd" class="btn" aria-label="滚动到底部" title="Scroll to the End">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M7 10l5 5 5-5H7zM5 18h14v2H5z" />
+                </svg>
+                <span class="label">到底</span>
+            </button>
+        </div>
+        <div class="content">
+            <div id="log"></div>
+        </div>
+    </div>
+    <script nonce="{{NONCE}}">{{SCRIPT}}</script>
+</body>
+
+</html>

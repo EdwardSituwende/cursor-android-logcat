@@ -24,7 +24,8 @@ export class ProcessManager {
     private readonly onAppend: (text: string) => void,
     private readonly onStatus: (text: string) => void,
     private readonly isVisible: () => boolean,
-    private readonly debugLog: (...parts: any[]) => void
+    private readonly debugLog: (...parts: any[]) => void,
+    private readonly onExit?: () => void
   ) {}
 
   isRunning(): boolean { return this.isRunningInternal; }
@@ -106,10 +107,12 @@ export class ProcessManager {
       this.bufferedWhileHidden = "";
       this.isPausedInternal = false;
       this.pausedBuffer = '';
+      try { this.onExit && this.onExit(); } catch {}
     });
     proc.on('error', (err) => {
       this.onStatus(`进程错误: ${String(err)}`);
       this.debugLog('process error', String(err));
+      try { this.onExit && this.onExit(); } catch {}
     });
   }
 

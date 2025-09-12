@@ -5,6 +5,7 @@ const deviceSel = $('device');
 const toggleBtn = $('toggle');
 const clearBtn = $('clear');
 const exportBtn = $('export');
+const importBtn = $('import');
 const scrollEndBtn = $('scrollEnd');
 const logEl = $('log');
 const statusEl = $('status');
@@ -12,6 +13,8 @@ const filterInput = $('filter');
 const matchCaseBtn = $('matchCase');
 const softWrapChk = $('softWrap');
 let DEBUG = true;
+let importMode = false;
+let importName = '';
 function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments); } catch(e){} }
 
 function setStatus(t){ statusEl.textContent = t; }
@@ -162,6 +165,15 @@ function buildSuggestedFilename(){
   const name = 'AndroidLog-' + serial + '-' + dt.getFullYear() + pad(dt.getMonth()+1) + pad(dt.getDate()) + '-' + pad(dt.getHours()) + pad(dt.getMinutes()) + pad(dt.getSeconds()) + '.txt';
   return name.replace(/\s+/g,'_');
 }
+function truncateMiddle(name, maxLen){
+  try {
+    const s = String(name || '');
+    if (s.length <= maxLen) return s;
+    const head = Math.ceil((maxLen - 3) / 2);
+    const tail = Math.floor((maxLen - 3) / 2);
+    return s.slice(0, head) + '...' + s.slice(s.length - tail);
+  } catch { return name; }
+}
 function getFullLogText(){
   // 合并 backlog + 未刷新的 queued + 未跟随期间的 pending
   let text = backlogText || '';
@@ -180,18 +192,44 @@ function setDevices(devs, defaultSerial){
   if (!devs || devs.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = '未检测到设备';
+    opt.textContent = importMode && importName ? importName : '未检测到设备';
     deviceSel.appendChild(opt);
     return;
   }
-  for (const d of devs){
+  // 在线优先排序
+  const score = (d) => {
+    const s = (d && d.status) ? String(d.status).toLowerCase() : '';
+    if (!s || s === 'device') return 0; // online
+    if (s === 'unauthorized') return 2;
+    return 1; // offline / unknown
+  };
+  const sorted = [...devs].sort((a,b) => score(a) - score(b));
+  for (const d of sorted){
     const opt = document.createElement('option');
     opt.value = d.serial;
-    opt.textContent = d.model ? (d.serial + ' (' + d.model + ')') : d.serial;
+    const base = d.model ? (d.serial + '(' + d.model + ')') : d.serial;
+    const s = (d && d.status) ? String(d.status).toLowerCase() : '';
+    let suffix = '';
+    if (s && s !== 'device') {
+      if (s === 'offline') suffix = '-OFFLINE';
+      else if (s === 'unauthorized') suffix = '-UNAUTHORIZED';
+      else suffix = '-' + s.toUpperCase();
+    }
+    opt.textContent = base + suffix;
     deviceSel.appendChild(opt);
   }
   if (defaultSerial) {
     try { deviceSel.value = defaultSerial; } catch(e){}
+  }
+  if (importMode && importName) {
+    // 导入模式：在首位插入导入文件项并选中
+    try {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = importName;
+      deviceSel.insertBefore(opt, deviceSel.firstChild);
+      deviceSel.value = '';
+    } catch(e){}
   }
   // 若状态中保存过设备，优先恢复该选择
   try {
@@ -215,6 +253,22 @@ window.addEventListener('message', (e) => {
     case 'status': setStatus(msg.text); applyPausedStateFromStatus(msg.text); break;
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
+    case 'importDump':
+      // 导入文本：清空现有显示与缓存，直接渲染导入内容
+      backlogText = msg.text || '';
+      historyLoaded = true;
+      scheduleRebuild();
+      break;
+    case 'importMode':
+      importMode = true;
+      importName = truncateMiddle(String(msg.name || 'Imported.txt'), 48);
+      // 置灰暂停按钮
+      toggleBtn.setAttribute('disabled', 'true');
+      toggleBtn.classList.add('disabled');
+      setStatus('已进入导入模式');
+      // 用导入项刷新设备列表顶部显示
+      setDevices([], '');
+      break;
     case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
     case 'visible':
       // 面板重新可见：若还没有缓存，则尝试拉取一次历史
@@ -239,6 +293,13 @@ deviceSel.addEventListener('change', () => {
   backlogText = '';
   logEl.innerHTML = '';
   historyLoaded = false;
+  if (importMode) {
+    // 退出导入模式，恢复可交互
+    importMode = false;
+    importName = '';
+    toggleBtn.removeAttribute('disabled');
+    toggleBtn.classList.remove('disabled');
+  }
   if (deviceSel.value) {
     dlog('[device] select -> switch stream and request history');
     vscode.postMessage({ type: 'selectDevice', serial: deviceSel.value });
@@ -282,6 +343,16 @@ function setToggleUi(paused){
   const iconPause = document.getElementById('iconPause');
   const iconPlay = document.getElementById('iconPlay');
   const toggleLabel = document.getElementById('toggleLabel');
+  if (importMode) {
+    // 导入模式：强制显示为“暂停”且禁用
+    if (iconPause) iconPause.classList.remove('hidden');
+    if (iconPlay) iconPlay.classList.add('hidden');
+    if (toggleLabel) toggleLabel.textContent = '暂停';
+    toggleBtn.setAttribute('aria-label', '暂停');
+    toggleBtn.setAttribute('title', '暂停');
+    toggleBtn.setAttribute('disabled', 'true');
+    return;
+  }
   if (paused) {
     if (iconPause) iconPause.classList.add('hidden');
     if (iconPlay) iconPlay.classList.remove('hidden');
@@ -320,6 +391,12 @@ clearBtn.addEventListener('click', clearLog);
 if (exportBtn) {
   exportBtn.addEventListener('click', () => exportLogs());
 }
+if (importBtn) {
+  importBtn.addEventListener('click', () => {
+    // 进入导入流程：任何正在运行的抓取由后端负责停止
+    vscode.postMessage({ type: 'importLogs' });
+  });
+}
 if (scrollEndBtn) {
   scrollEndBtn.addEventListener('click', () => enableFollowAndStick());
 }
@@ -333,6 +410,11 @@ function scheduleRebuild(){
     const stick = autoFollow && isAtBottom();
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
     logEl.innerHTML = renderHtmlFromText(text);
+    // 导入模式默认开启软换行
+    if (importMode) {
+      if (softWrapChk) softWrapChk.checked = true;
+      logEl.classList.add('wrap');
+    }
     if (softWrapChk && softWrapChk.checked) {
       logEl.classList.add('wrap');
     } else {

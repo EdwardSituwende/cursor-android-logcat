@@ -14,6 +14,7 @@ const clearFilterBtn = $('clearFilter');
 const matchCaseBtn = $('matchCase');
 const softWrapBtn = $('softWrapBtn');
 let DEBUG = true;
+let currentPackage = '';
 let importMode = false;
 let importName = '';
 function dlog(){ if (!DEBUG) return; try { console.log.apply(console, arguments); } catch(e){} }
@@ -67,6 +68,56 @@ function detectLevel(line){
   if (m && m[1]) return m[1].toLowerCase();
   return '';
 }
+// 格式化输出：日期时间、PID-TID、Tag、Package、Priority、Message
+const COL_TAG = 23; // Tag 固定宽度
+const COL_PKG = 30; // Package 固定最大宽度（不足补空格，对齐）
+const COL_PID = 11; // PID-TID 固定宽度，例如 21347-21569
+function padEndFixed(s, n){ s = String(s || ''); return s.length >= n ? s.slice(0, n) : (s + ' '.repeat(n - s.length)); }
+function padEndNoCut(s, n){ s = String(s || ''); return s.length >= n ? s : (s + ' '.repeat(n - s.length)); }
+function middleEllipsisFixed(s, width){
+  s = String(s || '');
+  if (s.length <= width) return padEndNoCut(s, width);
+  const head = Math.ceil((width - 3) / 2);
+  const tail = Math.floor((width - 3) / 2);
+  return s.slice(0, head) + '...' + s.slice(s.length - tail);
+}
+function splitTagAndPkg(tagField){
+  const raw = String(tagField || '').trim();
+  if (!raw) return { tag: '', pkg: '' };
+  const idx = raw.lastIndexOf(' ');
+  if (idx > 0) {
+    const maybePkg = raw.slice(idx + 1).trim();
+    const left = raw.slice(0, idx).trim();
+    if (/^[\w.$-]+$/.test(maybePkg) && maybePkg.indexOf('.') !== -1) {
+      return { tag: left, pkg: maybePkg };
+    }
+  }
+  return { tag: raw, pkg: '' };
+}
+function formatDateWithYear(dt){
+  // 输入：YYYY-MM-DD HH:MM:SS.mmm 或 MM-DD HH:MM:SS.mmm
+  if (!dt) return '';
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}$/.test(dt)) return dt;
+  if (/^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}$/.test(dt)) {
+    const y = new Date().getFullYear();
+    return y + '-' + dt.replace(/^(\d{2})-(\d{2})/, '$1-$2');
+  }
+  return dt;
+}
+function parseLogLine(line){
+  // threadtime: 09-13 15:12:53.025 或 2025-09-13 15:12:53.025
+  let m = line.match(/^(\d{2,4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFS])\s+([^:]+):\s*(.*)$/);
+  if (m) { const tp = splitTagAndPkg(m[5]); return { dt: formatDateWithYear(m[1]), pid: m[2], tid: m[3], pri: m[4], tag: tp.tag, pkg: tp.pkg, msg: m[6] }; }
+  // time: 09-13 15:12:53.025 或 2025-09-13 15:12:53.025  P/TAG( PID ): msg
+  m = line.match(/^(\d{2,4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+([VDIWEFS])\/([^\s(]+)\s*\(\s*(\d+)\s*\)\s*:\s*(.*)$/);
+  if (m) { const tp = splitTagAndPkg(m[3]); return { dt: formatDateWithYear(m[1]), pid: m[4], tid: '', pri: m[2], tag: tp.tag, pkg: tp.pkg, msg: m[5] }; }
+  // brief: P/TAG( PID ): msg
+  m = line.match(/^([VDIWEFS])\/([^\s(]+)\s*\(\s*(\d+)\s*\)\s*:\s*(.*)$/);
+  if (m) { const tp = splitTagAndPkg(m[2]); return { dt: '', pid: m[3], tid: '', pri: m[1], tag: tp.tag, pkg: tp.pkg, msg: m[4] }; }
+  // fallback
+  const lv = detectLevel(line).toUpperCase();
+  return { dt: '', pid: '', tid: '', pri: lv, tag: '', pkg: '', msg: line };
+}
 function renderHtmlFromText(text){
   if (!text) return '';
   const lines = text.split(/\r?\n/);
@@ -74,9 +125,21 @@ function renderHtmlFromText(text){
   for (let i = 0; i < lines.length; i++){
     const line = lines[i];
     if (line === '' && i === lines.length - 1) break; // 末尾空行避免多余节点
-    const lv = detectLevel(line);
+    const obj = parseLogLine(line);
+    const lv = (obj.pri || '').toLowerCase();
     const cls = lv ? (' lv-' + lv) : '';
-    html += '<span class="' + cls.trim() + '">' + escapeHtml(line) + '</span>\n';
+    const pidTidRaw = obj.pid ? (obj.pid + (obj.tid ? ('-' + obj.tid) : '')) : '';
+    const pidTid = padEndNoCut(pidTidRaw, COL_PID);
+    const rawTag = obj.tag || '';
+    const tag = middleEllipsisFixed(rawTag, COL_TAG);
+    const pkgSrc = obj.pkg || currentPackage || '';
+    const pkg = middleEllipsisFixed(pkgSrc, COL_PKG);
+    const pri = obj.pri || '';
+    const parts = [obj.dt, pidTid, '<span class="cell-tag" title="' + escapeHtml(rawTag) + '">' + escapeHtml(tag) + '</span>'];
+    if (pkg) parts.push('<span class="cell-pkg" title="' + escapeHtml(pkgSrc) + '">' + escapeHtml(pkg) + '</span>');
+    parts.push(pri, obj.msg || '');
+    const composed = parts.filter(Boolean).join('  ').replace(/\s+$/,'');
+    html += '<span class="' + cls.trim() + '">' + composed + '</span>\n';
   }
   return html;
 }
@@ -254,6 +317,11 @@ window.addEventListener('message', (e) => {
     case 'status': setStatus(msg.text); applyPausedStateFromStatus(msg.text); break;
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
+    case 'config':
+      try { currentPackage = String((msg.config && msg.config.pkg) || ''); } catch(e) { currentPackage = ''; }
+      // 包名变化影响整列布局，需要重建
+      scheduleRebuild();
+      break;
     case 'importDump':
       // 导入文本：清空现有显示与缓存，直接渲染导入内容
       backlogText = msg.text || '';

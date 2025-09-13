@@ -235,6 +235,12 @@ button {
   min-height: 0;
 }
 
+/* Tag/Package 单元格，保证光标悬停时有系统/浏览器 tooltip */
+#log .cell-tag,
+#log .cell-pkg {
+  display: inline;
+}
+
 #log.wrap {
   white-space: pre-wrap;
   word-break: break-word;

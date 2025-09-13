@@ -8,6 +8,7 @@ import { ProcessManager } from '../core/processManager';
 import { DeviceService } from '../services/DeviceService';
 import { StreamService } from '../services/StreamService';
 import { ImportService } from '../services/ImportService';
+import { PidMapService } from '../services/PidMapService';
 import { getLastConfig, setLastConfig, LastConfig } from '../state/configStore';
 import { IncomingWebviewMessage } from '../types/messages';
 
@@ -30,6 +31,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private currentSelectedSerial: string = '';
   private knownDevices: Map<string, DeviceInfo> = new Map();
   private importActive = false;
+  private pidMapSvc?: PidMapService;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.output = vscode.window.createOutputChannel('Android Logcat (Cursor)');
@@ -75,6 +77,11 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     // 初始化 StreamService
     this.streamSvc = new StreamService(this.context, (t) => this.post({ type: 'append', text: t }), (s) => this.post({ type: 'status', text: s }), () => !!this.view?.visible, (...p) => this.debugLog(...p), () => this.markSelectedDeviceOfflineOnExit());
 
+    // 初始化 PID 映射服务
+    this.pidMapSvc = new PidMapService((delta) => {
+      this.post({ type: 'pidMap', map: delta });
+    }, (...p) => this.debugLog(...p));
+
     // 启动设备跟踪
     if (!this.deviceTracker) {
       this.deviceTracker = this.deviceSvc.startTracking(async (devices) => {
@@ -110,8 +117,12 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         // 避免频繁刷新：先让前端根据其缓存自行恢复，再异步刷新设备
         this.post({ type: 'visible' });
         queueMicrotask(() => this.refreshDevicesAsync());
+        // 重新开启 PID 映射刷新（切回面板后 PID 可能变化，如 surfaceflinger 重启）
+        this.pidMapSvc?.start(1000);
+        this.pidMapSvc?.refreshNow();
       } else {
         this.proc.onHidden();
+        this.pidMapSvc?.stop();
       }
     });
 
@@ -175,6 +186,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           }
           if (!status || status === 'device') {
             this.startStreamForSerial(serial);
+            this.pidMapSvc?.start(1000);
             break;
           }
           // offline 等状态：有限退避等待上线
@@ -191,6 +203,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               if (ok) {
                 this.post({ type: 'status', text: '设备已上线，正在启动…' });
                 this.startStreamForSerial(serial);
+                this.pidMapSvc?.start(1000);
                 // 加载一次历史
                 this.post({ type: 'status', text: '正在加载历史日志...' });
                 try {
@@ -301,6 +314,10 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             this.post({ type: 'status', text: '导入失败' });
             this.debugLog('import error', String(e));
           }
+          break;
+        }
+        case 'pidMiss': {
+          try { const pid = Number((msg as any).pid || 0); if (pid && this.pidMapSvc) { this.pidMapSvc.demand([pid]); } } catch {}
           break;
         }
       }

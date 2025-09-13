@@ -8,6 +8,14 @@ const exportBtn = $('export');
 const importBtn = $('import');
 const scrollEndBtn = $('scrollEnd');
 const logEl = $('log');
+const findBar = $('findBar');
+const findInput = $('findInput');
+const findClear = $('findClear');
+const findCase = $('findCase');
+const findRegex = $('findRegex');
+const findCounter = $('findCounter');
+const findPrev = $('findPrev');
+const findNext = $('findNext');
 const statusEl = $('status');
 const filterInput = $('filter');
 const clearFilterBtn = $('clearFilter');
@@ -51,6 +59,15 @@ let rebuildScheduled = false;
 let filterAst = null; // Array<Array<string>> | null
 let historyLoaded = false;
 let saveStateScheduled = false;
+const pidMap = new Map();
+// find state
+let findVisible = false;
+let findMatchCase = false;
+let findUseRegex = false;
+let findQuery = '';
+let findMatches = [];
+let findIndex = 0;
+let preserveScrollNextRebuild = false;
 // 颜色渲染：转义与按行着色
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
@@ -132,12 +149,23 @@ function renderHtmlFromText(text){
     const pidTid = padEndNoCut(pidTidRaw, COL_PID);
     const rawTag = obj.tag || '';
     const tag = middleEllipsisFixed(rawTag, COL_TAG);
-    const pkgSrc = obj.pkg || currentPackage || '';
+    let pkgSrc = obj.pkg || '';
+    if (!pkgSrc && obj.pid) {
+      try {
+        const name = pidMap.get(Number(obj.pid));
+        if (name) pkgSrc = name;
+        else {
+          // 主动触发一次按需刷新（后端会节流）
+          vscode.postMessage({ type: 'pidMiss', pid: Number(obj.pid) });
+        }
+      } catch(e){}
+    }
+    if (!pkgSrc) pkgSrc = currentPackage || '';
     const pkg = middleEllipsisFixed(pkgSrc, COL_PKG);
     const pri = obj.pri || '';
-    const parts = [obj.dt, pidTid, '<span class="cell-tag" title="' + escapeHtml(rawTag) + '">' + escapeHtml(tag) + '</span>'];
-    if (pkg) parts.push('<span class="cell-pkg" title="' + escapeHtml(pkgSrc) + '">' + escapeHtml(pkg) + '</span>');
-    parts.push(pri, obj.msg || '');
+    const parts = [obj.dt, pidTid, '<span class="cell-tag" title="' + escapeHtml(rawTag) + '">' + highlightSegment(tag) + '</span>'];
+    if (pkg) parts.push('<span class="cell-pkg" title="' + escapeHtml(pkgSrc) + '">' + highlightSegment(pkg) + '</span>');
+    parts.push(pri, highlightSegment(obj.msg || ''));
     const composed = parts.filter(Boolean).join('  ').replace(/\s+$/,'');
     html += '<span class="' + cls.trim() + '">' + composed + '</span>\n';
   }
@@ -190,6 +218,144 @@ function scheduleFlush(){
       logEl.scrollTop = logEl.scrollHeight;
     }
   });
+}
+// --- Find bar ---
+function updateFindCounter(){
+  try { findCounter.textContent = (findMatches.length ? (String(findIndex+1) + '/' + String(findMatches.length)) : '0/0'); } catch(e){}
+}
+function openFind(){
+  if (!findBar) return;
+  findBar.hidden = false;
+  findVisible = true;
+  setTimeout(() => { try { findInput.focus(); findInput.select(); } catch(e){} }, 0);
+  try { logEl.classList.add('has-find'); } catch(e){}
+}
+function closeFind(){
+  if (!findBar) return;
+  findBar.hidden = true;
+  findVisible = false;
+  try { logEl.classList.remove('has-find'); } catch(e){}
+}
+function recomputeFind(){
+  findQuery = String(findInput.value || '');
+  findMatchCase = (findCase.getAttribute('aria-pressed') === 'true');
+  findUseRegex = (findRegex.getAttribute('aria-pressed') === 'true');
+  findMatches = [];
+  findIndex = 0;
+  if (!findQuery) { updateFindCounter(); return; }
+  try {
+    const text = backlogText || '';
+    const hay = findMatchCase ? text : text.toLowerCase();
+    const needle = findMatchCase ? findQuery : findQuery.toLowerCase();
+    if (findUseRegex) {
+      const flags = findMatchCase ? 'g' : 'gi';
+      const re = new RegExp(findQuery, flags);
+      let m; while ((m = re.exec(text))){ findMatches.push({ start: m.index, end: m.index + (m[0] ? m[0].length : 0) }); if (m.index === re.lastIndex) re.lastIndex++; }
+    } else {
+      let pos = 0; while (true){
+        const idx = hay.indexOf(needle, pos);
+        if (idx === -1) break;
+        findMatches.push({ start: idx, end: idx + needle.length });
+        pos = idx + Math.max(1, needle.length);
+      }
+    }
+  } catch(e){}
+  updateFindCounter();
+  // 保持当前滚动位置；不自动滚到顶部
+  preserveScrollNextRebuild = true;
+  scheduleRebuild();
+}
+function scrollToFindIndex(){
+  if (!findMatches.length) return;
+  const m = findMatches[findIndex];
+  // 估算行：通过分割索引近似计算
+  try {
+    const pre = (backlogText || '').slice(0, m.start);
+    const lineNum = pre.split(/\n/).length; // 1-based
+    const lines = logEl.querySelectorAll('span');
+    const target = lines[lineNum - 1];
+    if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } catch(e){}
+}
+function setToggle(btn, on){ btn.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+if (findClear) findClear.addEventListener('click', () => { findInput.value = ''; recomputeFind(); });
+if (findCase) findCase.addEventListener('click', () => { findMatchCase = !findMatchCase; setToggle(findCase, findMatchCase); recomputeFind(); });
+if (findRegex) findRegex.addEventListener('click', () => { findUseRegex = !findUseRegex; setToggle(findRegex, findUseRegex); recomputeFind(); });
+if (findInput) findInput.addEventListener('input', recomputeFind);
+if (findPrev) findPrev.addEventListener('click', () => { if (!findMatches.length) return; findIndex = (findIndex - 1 + findMatches.length) % findMatches.length; updateFindCounter(); scrollToFindIndex(); scheduleRebuild(); });
+if (findNext) findNext.addEventListener('click', () => { if (!findMatches.length) return; findIndex = (findIndex + 1) % findMatches.length; updateFindCounter(); scrollToFindIndex(); scheduleRebuild(); });
+document.addEventListener('keydown', (e) => {
+  // 仅当 Webview 获得焦点时拦截快捷键，阻止冒泡到编辑器
+  const isFind = (e.key === 'f' || e.key === 'F') && (e.metaKey || e.ctrlKey);
+  if (isFind) {
+    e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+    if ((e).stopImmediatePropagation) (e).stopImmediatePropagation();
+    openFind();
+    return;
+  }
+  if (e.key === 'Escape' && findVisible) {
+    e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+    if ((e).stopImmediatePropagation) (e).stopImmediatePropagation();
+    closeFind();
+    return;
+  }
+  if (!findVisible) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+    if ((e).stopImmediatePropagation) (e).stopImmediatePropagation();
+    if (!findMatches.length) return;
+    if (e.shiftKey) { findIndex = (findIndex - 1 + findMatches.length) % findMatches.length; }
+    else { findIndex = (findIndex + 1) % findMatches.length; }
+    updateFindCounter();
+    scrollToFindIndex();
+    scheduleRebuild();
+  }
+}, true);
+
+function highlightSegment(msg){
+  if (!findVisible || !findQuery) return escapeHtml(msg);
+  try {
+    if (findUseRegex) {
+      const flags = findMatchCase ? 'g' : 'gi';
+      const re = new RegExp(findQuery, flags);
+      let last = 0; let out = '';
+      let idx = 0; let m;
+      while ((m = re.exec(msg))) {
+        const s = m.index; const e = m.index + (m[0] ? m[0].length : 0);
+        out += escapeHtml(msg.slice(last, s));
+        const cls = pickHlClass(idx++);
+        out += '<span class="' + cls + '">' + escapeHtml(msg.slice(s, e)) + '</span>';
+        last = e;
+        if (m.index === re.lastIndex) re.lastIndex++;
+      }
+      out += escapeHtml(msg.slice(last));
+      return out;
+    } else {
+      const hay = findMatchCase ? msg : msg.toLowerCase();
+      const needle = findMatchCase ? findQuery : findQuery.toLowerCase();
+      if (!needle) return escapeHtml(msg);
+      let last = 0; let out = '';
+      let pos = 0; let idx = 0; let p;
+      while ((p = hay.indexOf(needle, pos)) !== -1) {
+        out += escapeHtml(msg.slice(last, p));
+        const cls = pickHlClass(idx++);
+        out += '<span class="' + cls + '">' + escapeHtml(msg.slice(p, p + needle.length)) + '</span>';
+        last = p + needle.length;
+        pos = last;
+      }
+      out += escapeHtml(msg.slice(last));
+      return out;
+    }
+  } catch(e) { return escapeHtml(msg); }
+}
+function pickHlClass(k){
+  try {
+    if (!findMatches.length) return 'hl';
+    return k === (findIndex % Math.max(1, findMatches.length)) ? 'hl-current' : 'hl';
+  } catch(e) { return 'hl'; }
 }
 function append(t){
   // 未跟随时不修改 DOM，避免卡顿；先缓冲，提示有新日志
@@ -317,6 +483,14 @@ window.addEventListener('message', (e) => {
     case 'status': setStatus(msg.text); applyPausedStateFromStatus(msg.text); break;
     case 'append': append(msg.text); break;
     case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
+    case 'pidMap':
+      try {
+        const map = msg.map || {};
+        for (const k in map) { if (Object.prototype.hasOwnProperty.call(map,k)) pidMap.set(Number(k), String(map[k])); }
+        // 新的 PID 映射可能影响已渲染行，触发一次重建
+        scheduleRebuild();
+      } catch(e){}
+      break;
     case 'config':
       try { currentPackage = String((msg.config && msg.config.pkg) || ''); } catch(e) { currentPackage = ''; }
       // 包名变化影响整列布局，需要重建
@@ -501,6 +675,7 @@ function scheduleRebuild(){
   requestAnimationFrame(() => {
     rebuildScheduled = false;
     const stick = autoFollow && isAtBottom();
+    const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
     logEl.innerHTML = renderHtmlFromText(text);
     // 导入模式默认开启软换行
@@ -514,6 +689,10 @@ function scheduleRebuild(){
       logEl.classList.add('wrap');
     } else {
       logEl.classList.remove('wrap');
+    }
+    if (preserveScrollNextRebuild && prevScrollTop != null) {
+      try { logEl.scrollTop = prevScrollTop; } catch(e){}
+      preserveScrollNextRebuild = false;
     }
     if (stick) logEl.scrollTop = logEl.scrollHeight;
   });

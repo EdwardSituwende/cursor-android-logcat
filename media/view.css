@@ -16,6 +16,8 @@ body {
   grid-template-columns: auto 1fr;
   gap: 8px;
   align-items: center;
+  position: relative;
+  z-index: 10;
 }
 
 .top-controls .filter {
@@ -93,7 +95,88 @@ body {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
+
+.findbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(30,30,30,0.9);
+  backdrop-filter: saturate(120%) blur(2px);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, #2a2a2a);
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 强制 hidden 时不显示（避免样式覆盖） */
+.findbar[hidden] {
+  display: none !important;
+}
+
+.find-input {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, #2a2a2a);
+  border-radius: 4px;
+  padding: 0 26px 0 8px;
+}
+
+.find-counter {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* 搜索高亮 */
+#log .hl {
+  background: rgba(187, 134, 252, 0.35); /* 浅紫色 */
+  color: #000;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25);
+}
+#log .hl-current {
+  background: #b388ff; /* 更醒目的浅紫 */
+  color: #000;
+  font-weight: 600;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35);
+}
+
+/* 美化查找条图标按钮 */
+.findbar .icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--vscode-input-border, #2a2a2a);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.05);
+  color: var(--vscode-button-secondaryForeground);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease, color 120ms ease;
+}
+.findbar .icon-btn:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: var(--vscode-focusBorder);
+}
+.findbar .icon-btn:active { transform: translateY(1px); }
+.findbar .icon-btn svg { pointer-events: none; }
+
+/* 让查找条里的切换按钮保持同高 */
+.findbar .btn-toggle { height: 26px; padding: 0 8px; min-width: auto; }
 
 .row {
   display: flex;
@@ -233,6 +316,10 @@ button {
   flex: 1;
   overflow: auto;
   min-height: 0;
+}
+
+#log.has-find {
+  padding-top: 48px; /* 预留搜索条高度，避免遮挡 */
 }
 
 /* Tag/Package 单元格，保证光标悬停时有系统/浏览器 tooltip */

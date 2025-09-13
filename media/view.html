@@ -16,7 +16,7 @@
         <select id="device"></select>
         <div class="filter">
             <span class="filter-input-wrap">
-                <input id="filter" placeholder="Press ^Space to see suggestions" />
+                <input id="filter" placeholder="Filter logs" />
                 <button id="clearFilter" class="icon-btn filter-clear" aria-label="清除" title="清除" tabindex="-1">
                     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                 </button>
@@ -73,6 +73,21 @@
             </button>
         </div>
         <div class="content">
+            <div id="findBar" class="findbar" hidden>
+                <input id="findInput" class="find-input" placeholder="Find" />
+                <button id="findClear" class="icon-btn" aria-label="清除" title="清除">
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+                <button id="findCase" class="btn btn-toggle" aria-pressed="false" title="Match case">W</button>
+                <button id="findRegex" class="btn btn-toggle" aria-pressed="false" title="Regex">.*</button>
+                <span id="findCounter" class="find-counter">0/0</span>
+                <button id="findPrev" class="icon-btn" aria-label="上一条" title="Previous">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                </button>
+                <button id="findNext" class="icon-btn" aria-label="下一条" title="Next">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8.59 16.59 10 18l6-6-6-6-1.41 1.41L13.17 12z"/></svg>
+                </button>
+            </div>
             <div id="log"></div>
         </div>
     </div>

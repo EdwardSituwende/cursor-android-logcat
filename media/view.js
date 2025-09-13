@@ -299,6 +299,8 @@ deviceSel.addEventListener('change', () => {
     importName = '';
     toggleBtn.removeAttribute('disabled');
     toggleBtn.classList.remove('disabled');
+    // 通知后端取消导入状态
+    try { vscode.postMessage({ type: 'status', text: '退出导入模式' }); } catch(e){}
   }
   if (deviceSel.value) {
     dlog('[device] select -> switch stream and request history');

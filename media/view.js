@@ -10,8 +10,9 @@ const scrollEndBtn = $('scrollEnd');
 const logEl = $('log');
 const statusEl = $('status');
 const filterInput = $('filter');
+const clearFilterBtn = $('clearFilter');
 const matchCaseBtn = $('matchCase');
-const softWrapChk = $('softWrap');
+const softWrapBtn = $('softWrapBtn');
 let DEBUG = true;
 let importMode = false;
 let importName = '';
@@ -399,6 +400,28 @@ if (importBtn) {
     vscode.postMessage({ type: 'importLogs' });
   });
 }
+if (clearFilterBtn) {
+  const doClear = () => {
+    filterInput.value = '';
+    filterText = '';
+    compileFilterAst(filterText);
+    scheduleSaveState();
+    scheduleRebuild();
+    try { filterInput.parentElement.classList.remove('has-value'); } catch(e){}
+    setStatus('已清除过滤');
+  };
+  clearFilterBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    doClear();
+  });
+  filterInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && (filterText && filterText.trim())) {
+      e.preventDefault();
+      doClear();
+    }
+  });
+}
 if (scrollEndBtn) {
   scrollEndBtn.addEventListener('click', () => enableFollowAndStick());
 }
@@ -414,10 +437,12 @@ function scheduleRebuild(){
     logEl.innerHTML = renderHtmlFromText(text);
     // 导入模式默认开启软换行
     if (importMode) {
-      if (softWrapChk) softWrapChk.checked = true;
       logEl.classList.add('wrap');
+      if (softWrapBtn) {
+        softWrapBtn.setAttribute('aria-pressed','true');
+      }
     }
-    if (softWrapChk && softWrapChk.checked) {
+    if (softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true') {
       logEl.classList.add('wrap');
     } else {
       logEl.classList.remove('wrap');
@@ -500,6 +525,13 @@ filterInput.addEventListener('input', (e) => {
   if (!backlogText) {
     vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
+  try {
+    const wrap = filterInput.parentElement;
+    if (wrap && wrap.classList) {
+      if (filterText && filterText.trim()) wrap.classList.add('has-value');
+      else wrap.classList.remove('has-value');
+    }
+  } catch(e){}
 });
 matchCaseBtn.addEventListener('click', () => {
   matchCase = !matchCase;
@@ -512,14 +544,15 @@ matchCaseBtn.addEventListener('click', () => {
 });
 
 // 换行（Soft-wrap）
-softWrapChk.addEventListener('change', () => {
-  if (softWrapChk.checked) {
-    logEl.classList.add('wrap');
-  } else {
-    logEl.classList.remove('wrap');
-  }
-  scheduleSaveState();
-});
+if (softWrapBtn) {
+  softWrapBtn.addEventListener('click', () => {
+    const current = softWrapBtn.getAttribute('aria-pressed') === 'true';
+    const next = !current;
+    softWrapBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
+    if (next) logEl.classList.add('wrap'); else logEl.classList.remove('wrap');
+    scheduleSaveState();
+  });
+}
 
 vscode.postMessage({ type: 'ready' });
 // 首帧：避免扩展后台自动启动时按钮文字状态与真实状态不一致
@@ -539,8 +572,9 @@ window.addEventListener('load', () => {
         matchCaseBtn.setAttribute('aria-pressed', matchCase ? 'true' : 'false');
       }
       if (typeof st.softWrap === 'boolean') {
-        softWrapChk.checked = !!st.softWrap;
-        if (softWrapChk.checked) logEl.classList.add('wrap');
+        const on = !!st.softWrap;
+        if (softWrapBtn) softWrapBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (on) logEl.classList.add('wrap');
       }
       if (typeof st.backlogText === 'string' && st.backlogText) {
         backlogText = st.backlogText;

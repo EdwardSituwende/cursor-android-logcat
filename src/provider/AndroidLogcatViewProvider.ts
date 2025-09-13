@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { extractFileName } from '../utils/path';
 import { loadWebviewHtml } from '../utils/html';
-import { dumpHistory as adbDumpHistory, listDevices as adbListDevices, DeviceInfo, trackDevices as adbTrackDevices, waitForDevice as adbWaitForDevice } from '../utils/adb';
+import { dumpHistory as adbDumpHistory, listDevices as adbListDevices, DeviceInfo, waitForDevice as adbWaitForDevice } from '../utils/adb';
 import { ProcessManager } from '../core/processManager';
+import { DeviceService } from '../services/DeviceService';
+import { StreamService } from '../services/StreamService';
+import { ImportService } from '../services/ImportService';
 import { getLastConfig, setLastConfig, LastConfig } from '../state/configStore';
 import { IncomingWebviewMessage } from '../types/messages';
 
@@ -17,6 +21,9 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private output: vscode.OutputChannel;
   private debugEnabled: boolean;
   private proc: ProcessManager;
+  private deviceSvc = new DeviceService();
+  private streamSvc!: StreamService;
+  private importSvc = new ImportService();
   private deviceTracker?: { dispose: () => void };
   private lastDevices: DeviceInfo[] = [];
   private pendingWaitToken = 0;
@@ -65,26 +72,15 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     });
     this.context.subscriptions.push(cfgDisp);
 
-    // 启动 adb track-devices 监听
+    // 初始化 StreamService
+    this.streamSvc = new StreamService(this.context, (t) => this.post({ type: 'append', text: t }), (s) => this.post({ type: 'status', text: s }), () => !!this.view?.visible, (...p) => this.debugLog(...p), () => this.markSelectedDeviceOfflineOnExit());
+
+    // 启动设备跟踪
     if (!this.deviceTracker) {
-      this.deviceTracker = adbTrackDevices(async (devices) => {
+      this.deviceTracker = this.deviceSvc.startTracking(async (devices) => {
         const fresh = devices || [];
         // 更新已知表
-        for (const d of fresh) {
-          const prev = this.knownDevices.get(d.serial);
-          const merged: DeviceInfo = { serial: d.serial, model: d.model || prev?.model, status: d.status };
-          this.knownDevices.set(d.serial, merged);
-        }
-        // 对于不在 fresh 列表中的已知设备，标记为 offline 以保留显示
-        const freshSet = new Set(fresh.map(d => d.serial));
-        const mergedList: DeviceInfo[] = [];
-        for (const d of fresh) mergedList.push(d);
-        for (const [serial, info] of this.knownDevices.entries()) {
-          if (!freshSet.has(serial)) {
-            mergedList.push({ serial, model: info.model, status: 'offline' });
-          }
-        }
-        this.lastDevices = mergedList;
+        this.lastDevices = fresh;
         const last = this.getLastConfig();
         this.post({ type: 'devices', devices: this.lastDevices, defaultSerial: last?.serial ?? '' });
         this.debugLog('trackDevices:update', this.lastDevices.length);
@@ -95,7 +91,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             const me = this.lastDevices.find(d => d.serial === this.currentSelectedSerial);
             const status = (me?.status || '').toLowerCase();
             const isOnline = (!status || status === 'device');
-            if (isOnline && !this.proc.isRunning()) {
+            if (isOnline && !this.streamSvc.isRunning()) {
               this.post({ type: 'status', text: '设备已恢复在线，正在自动启动…' });
               this.startStreamForSerial(this.currentSelectedSerial);
               const text = await this.dumpHistory(this.currentSelectedSerial, 5000);
@@ -154,7 +150,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'clear': {
-          this.proc.clearBuffers();
+          this.streamSvc.clearBuffers();
           this.post({ type: 'status', text: '已清空（仅UI与缓冲）' });
           this.debugLog('cleared buffers');
           break;
@@ -214,7 +210,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'start': {
-          if (!this.proc.isRunning()) {
+          if (!this.streamSvc.isRunning()) {
             const m = msg as any;
             if (!m.serial) {
               this.post({ type: 'status', text: '请先选择设备' });
@@ -223,7 +219,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             // 记录当前选中串口，便于退出时标记离线
             this.currentSelectedSerial = String(m.serial);
             this.debugLog('startProcess by user', { serial: m.serial, pkg: m.pkg, tag: m.tag, level: m.level, buffer: m.buffer, save: !!m.save });
-            this.proc.start({
+            this.streamSvc.start({
               serial: m.serial,
               pkg: m.pkg || '',
               tag: m.tag || '*',
@@ -239,19 +235,19 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               buffer: m.buffer || 'main',
               save: !!m.save,
             });
-          } else if (this.proc.isPaused()) {
-            this.proc.resume();
+          } else if (this.streamSvc.isPaused()) {
+            this.streamSvc.resume();
           } else {
             this.post({ type: 'status', text: '已在运行中' });
           }
           break;
         }
         case 'stop': {
-          this.proc.stop();
+          this.streamSvc.stop();
           break;
         }
         case 'pause': {
-          this.proc.pause();
+          this.streamSvc.pause();
           break;
         }
         case 'exportLogs': {
@@ -296,8 +292,8 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             // 发送到前端显示（不混淆历史标志）
             this.post({ type: 'importDump', text });
             // 进入导入模式：停止实时抓取，传递显示名称
-            try { this.proc.stop(); } catch {}
-            const name = this.extractFileName(file.fsPath);
+            try { this.streamSvc.stop(); } catch {}
+            const name = extractFileName(file.fsPath);
             this.post({ type: 'importMode', name });
             this.importActive = true;
             this.post({ type: 'status', text: '已导入日志: ' + file.fsPath });
@@ -373,10 +369,10 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   // 进程与缓冲逻辑下沉到 ProcessManager
 
   private dumpHistory(serial: string, maxLines: number = 5000): Promise<string> {
-    return adbDumpHistory(serial, maxLines);
+    return this.streamSvc.dumpHistory(serial, maxLines);
   }
 
-  private stopProcess() { this.proc.stop(); }
+  private stopProcess() { this.streamSvc.stop(); }
 
   private listDevices(): Promise<DeviceInfo[]> {
     return adbListDevices();
@@ -385,13 +381,13 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   private startStreamForSerial(serial: string) {
     this.currentSelectedSerial = serial;
     this.importActive = false;
-    if (this.proc.isRunning()) {
-      this.proc.stop();
+    if (this.streamSvc.isRunning()) {
+      this.streamSvc.stop();
     }
     const last = this.getLastConfig() || { serial: '', pkg: '', tag: '*', level: 'D', buffer: 'main', save: false };
     const startCfg = { serial, pkg: last.pkg, tag: last.tag, level: last.level, buffer: last.buffer, save: last.save };
     this.debugLog('startStreamForSerial', startCfg);
-    this.proc.start(startCfg);
+    this.streamSvc.start(startCfg);
     this.setLastConfig(startCfg);
   }
 

@@ -93,6 +93,12 @@ cursor --install-extension /path/to/cursor-android-logcat-x.y.z.vsix
 ```
 cursor-android-logcat/
   ├─ src/extension.ts           # 后端：注册视图、设备获取、脚本启动、流式回传
+  ├─ src/services/              # 业务服务（单一职责，可测试）
+  │   ├─ DeviceService.ts       # 设备跟踪、offline 回填、列表推送
+  │   ├─ StreamService.ts       # 进程与日志流管理、历史拉取
+  │   └─ ImportService.ts       # 导入模式状态与文件读取
+  ├─ src/utils/
+  │   └─ path.ts                # 路径与文件名工具
   ├─ media/
   │   ├─ view.html              # Webview 模板（占位符注入 CSP、nonce、样式与脚本）
   │   ├─ view.css               # UI 样式（固定工具行，日志区域自适应）

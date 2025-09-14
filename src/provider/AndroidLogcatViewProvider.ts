@@ -141,6 +141,15 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           this.refreshDevicesAsync();
           this.postLastConfigToWebview();
           this.autoStartIfPossible();
+          // 若首次扫描为空，短暂退避后再重试一次，避免 adb 冷启动窗口导致的空列表
+          setTimeout(() => {
+            try {
+              if (!this.lastDevices || this.lastDevices.length === 0) {
+                this.debugLog('ready: devices empty, retry refresh');
+                this.refreshDevicesAsync();
+              }
+            } catch {}
+          }, 600);
           break;
         }
         case 'requestHistory': {

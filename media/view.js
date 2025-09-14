@@ -50,7 +50,8 @@ let pendingWhileNotFollowing = '';
 let queuedAppend = '';
 let flushScheduled = false;
 const MAX_LOG_TEXT_LENGTH = 2_000_000; // 最多约 2MB 文本，超过则从头部裁剪
-const STATE_MAX_TEXT_LENGTH = 800_000; // 状态存储的最大文本长度（避免过大占用）
+// 移除大文本持久化，避免状态膨胀导致恢复/切换卡顿
+const STATE_MAX_TEXT_LENGTH = 0; // 保留常量但不再使用
 let backlogText = '';
 let filterText = '';
 let matchCase = false;
@@ -60,6 +61,8 @@ let filterAst = null; // Array<Array<string>> | null
 let historyLoaded = false;
 let saveStateScheduled = false;
 const pidMap = new Map();
+let pidMapDirty = false; // pidMap 增量合并标记，配合轻量节流
+let pidMapRebuildTimer = null;
 // find state
 let findVisible = false;
 let findMatchCase = false;
@@ -229,6 +232,13 @@ function openFind(){
   findVisible = true;
   setTimeout(() => { try { findInput.focus(); findInput.select(); } catch(e){} }, 0);
   try { logEl.classList.add('has-find'); } catch(e){}
+  // 若已有查询，按照当前可视区域重定位起始命中
+  try {
+    if (findQuery && findMatches && findMatches.length) {
+      alignFindIndexToViewport();
+      updateFindCounter();
+    }
+  } catch(e){}
 }
 function closeFind(){
   if (!findBar) return;
@@ -263,6 +273,8 @@ function recomputeFind(){
   updateFindCounter();
   // 保持当前滚动位置；不自动滚到顶部
   preserveScrollNextRebuild = true;
+  // 将当前命中对齐到视口
+  alignFindIndexToViewport();
   scheduleRebuild();
 }
 function scrollToFindIndex(){
@@ -275,6 +287,30 @@ function scrollToFindIndex(){
     const lines = logEl.querySelectorAll('span');
     const target = lines[lineNum - 1];
     if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } catch(e){}
+}
+function alignFindIndexToViewport(){
+  if (!findMatches.length) return;
+  try {
+    const scrollTop = logEl.scrollTop;
+    const viewBottom = scrollTop + logEl.clientHeight;
+    const text = backlogText || '';
+    // 通过累计行高近似定位
+    let acc = 0; let lineStart = 0; const lines = text.split(/\n/);
+    const lineOffsets = new Array(lines.length);
+    for (let i = 0; i < lines.length; i++) {
+      lineOffsets[i] = acc;
+      acc += lines[i].length + 1; // +\n
+    }
+    // 当前视口对应的起止字符索引（粗略：按 1:1 文本高度映射）
+    // 简化：以每行固定高度估算，找出视口中间附近的行，并匹配到最近命中
+    const approxLine = Math.max(0, Math.min(lines.length - 1, Math.round((scrollTop / logEl.scrollHeight) * lines.length)));
+    const approxOffset = lineOffsets[approxLine] || 0;
+    // 找到第一个 >= approxOffset 的命中
+    let idx = 0;
+    while (idx < findMatches.length && findMatches[idx].start < approxOffset) idx++;
+    if (idx >= findMatches.length) idx = findMatches.length - 1;
+    findIndex = idx;
   } catch(e){}
 }
 function setToggle(btn, on){ btn.setAttribute('aria-pressed', on ? 'true' : 'false'); }
@@ -487,8 +523,17 @@ window.addEventListener('message', (e) => {
       try {
         const map = msg.map || {};
         for (const k in map) { if (Object.prototype.hasOwnProperty.call(map,k)) pidMap.set(Number(k), String(map[k])); }
-        // 新的 PID 映射可能影响已渲染行，触发一次重建
-        scheduleRebuild();
+        // 新的 PID 映射可能影响已渲染行：标记脏并在下一帧/最小时间窗后统一重建，避免抖动
+        pidMapDirty = true;
+        if (!pidMapRebuildTimer) {
+          pidMapRebuildTimer = setTimeout(() => {
+            pidMapRebuildTimer = null;
+            if (pidMapDirty) {
+              pidMapDirty = false;
+              scheduleRebuild();
+            }
+          }, 50); // 50ms 时间窗内的多次更新合并
+        }
       } catch(e){}
       break;
     case 'config':
@@ -519,6 +564,15 @@ window.addEventListener('message', (e) => {
         dlog('[history] request on visible');
         vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
       }
+      // 可见时若设备选择仍为空或显示“未检测到设备”，主动刷新一次设备列表
+      try {
+        const onlyOne = deviceSel && deviceSel.options && deviceSel.options.length === 1 ? deviceSel.options[0] : null;
+        const emptyShown = onlyOne && !onlyOne.value && /未检测到设备/.test(String(onlyOne.textContent || ''));
+        if (!deviceSel || !deviceSel.options || deviceSel.options.length === 0 || emptyShown) {
+          dlog('[devices] visible -> refresh because empty');
+          vscode.postMessage({ type: 'refreshDevices' });
+        }
+      } catch(e){}
       break;
   }
 });
@@ -746,10 +800,6 @@ function scheduleSaveState(){
   requestAnimationFrame(() => {
     saveStateScheduled = false;
     try {
-      let textForState = backlogText || '';
-      if (textForState.length > STATE_MAX_TEXT_LENGTH) {
-        textForState = textForState.slice(textForState.length - STATE_MAX_TEXT_LENGTH);
-      }
       const softWrap = !!(softWrapChk && softWrapChk.checked);
       const device = (deviceSel && deviceSel.value) ? deviceSel.value : '';
       vscode.setState({
@@ -758,7 +808,6 @@ function scheduleSaveState(){
         softWrap: softWrap,
         device: device,
         historyLoaded: !!historyLoaded,
-        backlogText: textForState,
       });
     } catch(e){}
   });
@@ -823,10 +872,7 @@ window.addEventListener('load', () => {
         if (softWrapBtn) softWrapBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
         if (on) logEl.classList.add('wrap');
       }
-      if (typeof st.backlogText === 'string' && st.backlogText) {
-        backlogText = st.backlogText;
-        historyLoaded = !!st.historyLoaded || true;
-      }
+      // 不再从 state 恢复 backlogText，避免切换卡顿；保持 historyLoaded 用于决定是否请求历史
       // 初次进入根据状态重建视图
       scheduleRebuild();
     }

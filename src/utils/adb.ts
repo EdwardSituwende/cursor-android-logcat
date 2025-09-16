@@ -1,11 +1,71 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import * as vscode from 'vscode';
 
 export type DeviceInfo = { serial: string; model?: string; status?: string };
+
+function getConfiguredAdbPath(): string | undefined {
+  try {
+    const v = vscode.workspace.getConfiguration('cursorAndroidLogcat').get<string>('adbPath');
+    if (v && v.trim()) return v.trim();
+  } catch {}
+  return undefined;
+}
+
+function isExecutable(p: string): boolean {
+  try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; }
+}
+
+function which(cmd: string): string | undefined {
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.BAT;.CMD').split(';') : [''];
+  const paths = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of paths) {
+    for (const ext of exts) {
+      const full = path.join(dir, cmd + ext);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+  return undefined;
+}
+
+function findAdb(): string {
+  // 1) 配置项
+  const cfg = getConfiguredAdbPath();
+  if (cfg && fs.existsSync(cfg)) return cfg;
+  // 2) PATH
+  const viaPath = which('adb');
+  if (viaPath) return viaPath;
+  // 3) ANDROID_HOME/ANDROID_SDK_ROOT/platform-tools
+  const candidates: string[] = [];
+  const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+  if (sdk) candidates.push(path.join(sdk, 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb'));
+  // 4) 常见路径
+  const home = os.homedir();
+  candidates.push(path.join(home, 'Library', 'Android', 'sdk', 'platform-tools', 'adb'));
+  candidates.push('/usr/local/bin/adb');
+  candidates.push('/opt/homebrew/bin/adb');
+  for (const pth of candidates) {
+    if (fs.existsSync(pth)) return pth;
+  }
+  // 回退：依然返回 'adb' 交由系统解析
+  return 'adb';
+}
+
+function spawnAdb(args: string[]) {
+  const adb = findAdb();
+  return spawn(adb, args);
+}
+
+export function getResolvedAdbPath(): string {
+  return findAdb();
+}
 
 export function dumpHistory(serial: string, maxLines: number = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = ['-s', serial, 'logcat', '-d', '-b', 'all', '-v', 'time', '-t', String(maxLines)];
-    const proc = spawn('adb', args);
+    const proc = spawnAdb(args);
     const chunks: Buffer[] = [];
     proc.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
     proc.stderr.on('data', (d) => chunks.push(Buffer.from(d)));
@@ -22,7 +82,7 @@ export function dumpHistory(serial: string, maxLines: number = 5000): Promise<st
 
 export function listDevices(): Promise<DeviceInfo[]> {
   return new Promise((resolve) => {
-    const proc = spawn('adb', ['devices', '-l']);
+    const proc = spawnAdb(['devices', '-l']);
     const chunks: Buffer[] = [];
     proc.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
     proc.stderr.on('data', (d) => chunks.push(Buffer.from(d)));
@@ -40,20 +100,22 @@ export function listDevices(): Promise<DeviceInfo[]> {
 
 function parseDevicesOutput(out: string): DeviceInfo[] {
   const lines = out.split(/\r?\n/);
-  // 去掉可能存在的标题行
-  const body = lines[0] && /List of devices attached/i.test(lines[0]) ? lines.slice(1) : lines;
   const devices: DeviceInfo[] = [];
-  for (const raw of body) {
+  for (const raw of lines) {
     const line = String(raw || '').trim();
     if (!line) continue;
-    const parts = line.split(/\s+/);
-    if (parts.length < 2) continue;
-    const serial = parts[0];
-    const status = parts[1]; // device | offline | unauthorized | unknown
+    // 跳过标题和守护进程提示
+    if (/^List of devices attached/i.test(line)) continue;
+    if (/\* daemon /i.test(line)) continue;
+    // 仅接受形如: "<serial> <status> ..." 且 status 在已知集合内
+    const mHead = line.match(/^(\S+)\s+(\S+)(?:\s|$)/);
+    if (!mHead) continue;
+    const status = (mHead[2] || '').toLowerCase();
+    if (!/^(device|offline|unauthorized|unknown)$/.test(status)) continue;
+    const serial = mHead[1];
     let model: string | undefined;
     const m = line.match(/model:(\S+)/);
     if (m) model = m[1];
-    // 接受所有状态的设备，交由上层决定是否可用
     devices.push({ serial, model, status });
   }
   return devices;
@@ -62,7 +124,7 @@ function parseDevicesOutput(out: string): DeviceInfo[] {
 export function trackDevices(onList: (devices: DeviceInfo[]) => void): { dispose: () => void } {
   let disposed = false;
   // track-devices 不支持 -l；收到事件后再调用一次 devices -l 补充详细信息
-  const proc: ChildProcessWithoutNullStreams = spawn('adb', ['track-devices']);
+  const proc: ChildProcessWithoutNullStreams = spawnAdb(['track-devices']);
   let timer: NodeJS.Timeout | null = null;
   const scheduleRefresh = () => {
     if (disposed) return;
@@ -94,7 +156,7 @@ export function waitForDevice(serial: string, timeoutMs: number): Promise<boolea
   return new Promise((resolve) => {
     let done = false;
     const args = ['-s', serial, 'wait-for-device'];
-    const p = spawn('adb', args);
+    const p = spawnAdb(args);
     const finish = (ok: boolean) => {
       if (done) return;
       done = true;

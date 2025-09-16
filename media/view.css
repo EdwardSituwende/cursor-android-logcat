@@ -39,6 +39,12 @@ body {
   padding-right: 28px; /* 为清除按钮留出空间 */
 }
 
+/* 设备下拉在某些主题/布局下会被压缩到仅剩箭头，这里设置一个可读的最小宽度 */
+#device {
+  min-width: 220px;
+  height: 28px;
+}
+
 .filter-clear {
   position: absolute;
   right: 2px; /* 更靠近右边缘 */
@@ -307,7 +313,7 @@ button {
 
 /* Log area */
 #log {
-  white-space: pre;
+  white-space: normal;
   font-family: var(--vscode-editor-font-family, monospace);
   background: #181818;
   color: var(--vscode-editor-foreground);
@@ -316,6 +322,23 @@ button {
   flex: 1;
   overflow: auto;
   min-height: 0;
+}
+
+/* 每一条日志作为独立的块级元素，避免选择时把上一行一起选中 */
+#log > span {
+  display: block;
+  user-select: text;
+  white-space: pre;
+  margin: 0;
+  padding: 0;
+  line-height: 1.15;
+}
+
+/* 软换行时改为逐行 pre-wrap */
+#log.wrap > span {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 #log.has-find {
@@ -328,11 +351,7 @@ button {
   display: inline;
 }
 
-#log.wrap {
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
+/* 保留占位符：#log.wrap 的行内样式在每子项上处理，无需容器属性 */
 
 /* log level colors */
 .lv-v {

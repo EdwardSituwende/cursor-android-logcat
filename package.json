@@ -2,7 +2,7 @@
   "name": "cursor-android-logcat",
   "displayName": "Android Logcat (Cursor)",
   "description": "Minimal Android Logcat panel integrated with your cli_logcat.sh",
-  "version": "1.0.35",
+  "version": "1.0.38",
   "publisher": "edward-local",
   "repository": {
     "type": "git",
@@ -67,6 +67,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable debug logs in status bar and console"
+        },
+        "cursorAndroidLogcat.adbPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to adb. If empty, the extension will try PATH, ANDROID_HOME/ANDROID_SDK_ROOT/platform-tools and common locations."
         }
       }
     }

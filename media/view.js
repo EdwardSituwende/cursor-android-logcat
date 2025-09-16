@@ -146,6 +146,11 @@ function renderHtmlFromText(text){
     const line = lines[i];
     if (line === '' && i === lines.length - 1) break; // 末尾空行避免多余节点
     const obj = parseLogLine(line);
+    // 未解析为结构化日志（无时间/PID/Tag/Package），例如 Usage/帮助文本/分隔符等：保持原始文本布局
+    if (!obj.dt && !obj.pid && !obj.tag && !obj.pkg) {
+      html += '<span>' + highlightSegment(line) + '</span>';
+      continue;
+    }
     const lv = (obj.pri || '').toLowerCase();
     const cls = lv ? (' lv-' + lv) : '';
     const pidTidRaw = obj.pid ? (obj.pid + (obj.tid ? ('-' + obj.tid) : '')) : '';
@@ -170,7 +175,8 @@ function renderHtmlFromText(text){
     if (pkg) parts.push('<span class="cell-pkg" title="' + escapeHtml(pkgSrc) + '">' + highlightSegment(pkg) + '</span>');
     parts.push(pri, highlightSegment(obj.msg || ''));
     const composed = parts.filter(Boolean).join('  ').replace(/\s+$/,'');
-    html += '<span class="' + cls.trim() + '">' + composed + '</span>\n';
+    // 每行包裹在块级 <span> 中，便于选择单行（不再追加换行文本节点）
+    html += '<span class="' + cls.trim() + '">' + composed + '</span>';
   }
   return html;
 }
@@ -504,6 +510,12 @@ function setDevices(devs, defaultSerial){
       try { deviceSel.value = st.device; } catch(e){}
     }
   } catch(e){}
+  // 最终兜底：若依然没有选中任何项，则选择第一个可用设备，避免下拉显示为空
+  try {
+    if ((!deviceSel.value || deviceSel.selectedIndex < 0) && deviceSel.options && deviceSel.options.length > 0) {
+      deviceSel.selectedIndex = 0;
+    }
+  } catch(e){}
   // 设备选择也持久化一次
   scheduleSaveState();
   // 切回面板后设备列表到位：若尚未加载历史，则拉取一次
@@ -511,6 +523,12 @@ function setDevices(devs, defaultSerial){
     dlog('[history] request after devices');
     vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
+  // 若首次填充设备后尚未启动过抓取，且此时已有选中设备，则提示一次“准备就绪”
+  try {
+    if (deviceSel && deviceSel.value && !historyLoaded) {
+      setStatus('设备已就绪: ' + deviceSel.value);
+    }
+  } catch(e){}
 }
 
 window.addEventListener('message', (e) => {

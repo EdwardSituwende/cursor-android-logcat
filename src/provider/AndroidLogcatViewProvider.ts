@@ -11,6 +11,7 @@ import { ImportService } from '../services/ImportService';
 import { PidMapService } from '../services/PidMapService';
 import { getLastConfig, setLastConfig, LastConfig } from '../state/configStore';
 import { IncomingWebviewMessage } from '../types/messages';
+import { getResolvedAdbPath } from '../utils/adb';
 
 export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'android-logcat-view';
@@ -138,7 +139,11 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case 'ready': {
           this.post({ type: 'debug', enabled: this.debugEnabled });
+          // 报告解析到的 adb 路径，便于诊断 PATH 差异
+          try { this.post({ type: 'status', text: 'ADB: ' + getResolvedAdbPath() }); } catch {}
           this.refreshDevicesAsync();
+          // ADB 冷启动或权限弹窗场景：在首段时间窗内做指数退避重试，直到拿到设备
+          this.ensureDevicesSoon();
           this.postLastConfigToWebview();
           this.autoStartIfPossible();
           // 若首次扫描为空，短暂退避后再重试一次，避免 adb 冷启动窗口导致的空列表
@@ -339,6 +344,8 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     this.debugLog('listDevices:start');
     this.listDevices()
       .then((devices) => {
+        // 同步更新缓存，便于后续重试逻辑判断
+        this.lastDevices = devices || [];
         const last = this.getLastConfig();
         this.post({ type: 'devices', devices, defaultSerial: last?.serial ?? '' });
         this.debugLog('listDevices:found', devices?.length ?? 0);
@@ -347,6 +354,30 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         this.isRefreshingDevices = false;
         this.debugLog('listDevices:done');
       });
+  }
+
+  private ensureDevicesSoon(delays: number[] = [300, 800, 1500, 2500, 4000]) {
+    const tryOnce = (idx: number) => {
+      if (idx >= delays.length) return;
+      setTimeout(() => {
+        // 若已有设备则不再重试
+        if (this.lastDevices && this.lastDevices.length > 0) return;
+        this.debugLog('ensureDevicesSoon:retry', delays[idx]);
+        this.listDevices()
+          .then((devices) => {
+            if (devices && devices.length > 0) {
+              this.lastDevices = devices;
+              const last = this.getLastConfig();
+              this.post({ type: 'devices', devices, defaultSerial: last?.serial ?? '' });
+              this.debugLog('ensureDevicesSoon:got', devices.length);
+            } else {
+              tryOnce(idx + 1);
+            }
+          })
+          .catch(() => tryOnce(idx + 1));
+      }, Math.max(0, delays[idx]));
+    };
+    tryOnce(0);
   }
 
   private getLastConfig(): { serial: string; pkg: string; tag: string; level: string; buffer: string; save: boolean } | null {

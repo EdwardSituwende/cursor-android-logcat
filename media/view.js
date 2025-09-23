@@ -776,7 +776,21 @@ function filterTextChunk(text){
   let out = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const hay = matchCase ? line : line.toLowerCase();
+    // 组装可搜索文本：原始行 + 解析出的 Tag + 通过 pidMap/当前包名推导出的 Package
+    let searchLine = line;
+    try {
+      const obj = parseLogLine(line);
+      if (obj) {
+        let pkgSrc = obj.pkg || '';
+        if (!pkgSrc && obj.pid) {
+          try { const name = pidMap.get(Number(obj.pid)); if (name) pkgSrc = name; } catch(e){}
+        }
+        if (!pkgSrc) pkgSrc = currentPackage || '';
+        const extra = [obj.tag || '', pkgSrc || ''].filter(Boolean).join(' ');
+        if (extra) searchLine = line + ' ' + extra;
+      }
+    } catch(e){}
+    const hay = matchCase ? searchLine : searchLine.toLowerCase();
     if (lineMatchesAst(hay)) {
       out += line;
       if (i < lines.length - 1) out += '\n';

@@ -170,11 +170,10 @@ function renderHtmlFromText(text){
     }
     if (!pkgSrc) pkgSrc = currentPackage || '';
     const pkg = middleEllipsisFixed(pkgSrc, COL_PKG);
-    const pri = (obj.pri || '').toUpperCase();
-    const priBox = pri ? ('<span class="pri pri-' + pri.toLowerCase() + '" title="Priority ' + pri + '">' + pri + '</span>') : '';
+    const pri = obj.pri || '';
     const parts = [obj.dt, pidTid, '<span class="cell-tag" title="' + escapeHtml(rawTag) + '">' + highlightSegment(tag) + '</span>'];
     if (pkg) parts.push('<span class="cell-pkg" title="' + escapeHtml(pkgSrc) + '">' + highlightSegment(pkg) + '</span>');
-    parts.push(priBox, highlightSegment(obj.msg || ''));
+    parts.push(pri, highlightSegment(obj.msg || ''));
     const composed = parts.filter(Boolean).join('  ').replace(/\s+$/,'');
     // 每行包裹在块级 <span> 中，便于选择单行（不再追加换行文本节点）
     html += '<span class="' + cls.trim() + '">' + composed + '</span>';

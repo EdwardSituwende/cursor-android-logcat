@@ -34,6 +34,12 @@
     </div>
     <div class="main">
         <div class="sidebar">
+            <button id="clear" class="btn btn-danger" aria-label="清空" title="清空">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                </svg>
+                <span class="label">清空</span>
+            </button>
             <button id="toggle" class="btn btn-primary" aria-label="暂停" title="暂停">
                 <svg id="iconPause" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                     <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
@@ -43,11 +49,15 @@
                 </svg>
                 <span id="toggleLabel" class="label">暂停</span>
             </button>
-            <button id="clear" class="btn btn-danger" aria-label="清空" title="清空">
+            <button id="scrollEnd" class="btn" aria-label="滚动到底部" title="Scroll to the End">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                    <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                    <path fill="currentColor" d="M7 10l5 5 5-5H7zM5 18h14v2H5z" />
                 </svg>
-                <span class="label">清空</span>
+                <span class="label">到底</span>
+            </button>
+            <button id="softWrapBtn" class="btn btn-toggle" aria-label="软换行 (Soft-wrap)" title="Soft-wrap" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M21 3H3v2h18V3zM7 9h10v2H7V9zm-4 6h18v2H3v-2zm8 6H3v-2h8v2z"/></svg>
+                <span class="label">Sp</span>
             </button>
             <button id="import" class="btn" aria-label="导入日志" title="Import logs from a file">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -60,16 +70,6 @@
                     <path fill="currentColor" d="M5 20h14v-2H5v2zM12 2l5 5h-3v6h-4V7H7l5-5z" />
                 </svg>
                 <span class="label">导出</span>
-            </button>
-            <button id="softWrapBtn" class="btn btn-toggle" aria-label="软换行 (Soft-wrap)" title="Soft-wrap" aria-pressed="false">
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M21 3H3v2h18V3zM7 9h10v2H7V9zm-4 6h18v2H3v-2zm8 6H3v-2h8v2z"/></svg>
-                <span class="label">Sp</span>
-            </button>
-            <button id="scrollEnd" class="btn" aria-label="滚动到底部" title="Scroll to the End">
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                    <path fill="currentColor" d="M7 10l5 5 5-5H7zM5 18h14v2H5z" />
-                </svg>
-                <span class="label">到底</span>
             </button>
         </div>
         <div class="content">

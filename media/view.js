@@ -75,9 +75,10 @@ let preserveScrollNextRebuild = false;
 // --- 视口虚拟化（仅未开启软换行时启用） ---
 let virtLastDisplayText = '';
 let virtRepaintScheduled = false;
-const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化
+const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化（未换行）
+const VIRT_MIN_UNITS = 3000; // 折行单元数超过阈值才在软换行启用
 const VIRT_BUFFER_PX = 800;  // 视口上下各缓存约 800px 的内容
-let virt = { lineHeight: 18, totalLines: 0, first: 0, last: 0 };
+let virt = { lineHeight: 18, totalLines: 0, first: 0, last: 0, wrapUnits: null, wrapPrefix: null, contentWidth: 0, font: '' };
 function isSoftWrapOn(){ return !!(softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true'); }
 function measureLineHeight(){
   try {
@@ -89,25 +90,151 @@ function measureLineHeight(){
     return h;
   } catch(e) { return 18; }
 }
+function getCanvasCtx(){
+  try {
+    if (!getCanvasCtx._c) {
+      getCanvasCtx._c = document.createElement('canvas');
+      getCanvasCtx._ctx = getCanvasCtx._c.getContext('2d');
+    }
+    // 同步字体以提升测量准确性
+    try {
+      const cs = window.getComputedStyle(logEl);
+      const font = (cs.fontStyle || 'normal') + ' ' + (cs.fontVariant || 'normal') + ' ' + (cs.fontWeight || '400') + ' ' + (cs.fontSize || '14px') + ' / ' + (cs.lineHeight || 'normal') + ' ' + (cs.fontFamily || 'monospace');
+      if (virt.font !== font) {
+        virt.font = font;
+        getCanvasCtx._ctx.font = (cs.fontStyle || 'normal') + ' ' + (cs.fontWeight || '400') + ' ' + (cs.fontSize || '14px') + ' ' + (cs.fontFamily || 'monospace');
+      }
+    } catch(e){}
+    return getCanvasCtx._ctx;
+  } catch(e) { return null; }
+}
+function computeContentWidth(){
+  try {
+    const cs = window.getComputedStyle(logEl);
+    const pl = parseFloat(cs.paddingLeft || '0') || 0;
+    const pr = parseFloat(cs.paddingRight || '0') || 0;
+    const bwl = parseFloat(cs.borderLeftWidth || '0') || 0;
+    const bwr = parseFloat(cs.borderRightWidth || '0') || 0;
+    const w = logEl.clientWidth - pl - pr - bwl - bwr;
+    return Math.max(0, Math.floor(w));
+  } catch(e) { return Math.max(0, logEl.clientWidth - 16); }
+}
+function estimateWrapUnitsForLine(rawLine, ctx, contentWidth, baseLh){
+  try {
+    if (!rawLine) return 1;
+    // 按最终展示的“纯文本”估算：解析后拼接 dt/pid/tag/pkg/pri/msg
+    const obj = parseLogLine(rawLine);
+    const pidTidRaw = obj.pid ? (obj.pid + (obj.tid ? ('-' + obj.tid) : '')) : '';
+    const parts = [obj.dt || '', pidTidRaw, obj.tag || '', obj.pkg || '', (obj.pri || ''), obj.msg || ''].filter(Boolean);
+    const textForMeasure = parts.join('  ');
+    const m = ctx.measureText(textForMeasure);
+    const width = m && m.width ? m.width : (textForMeasure.length * 8);
+    const units = Math.max(1, Math.ceil(width / Math.max(1, contentWidth)));
+    return units;
+  } catch(e) { return 1; }
+}
+function ensureWrapUnits(displayText){
+  try {
+    const lh = virt.lineHeight || 18;
+    const ctx = getCanvasCtx();
+    if (!ctx) return null;
+    const cw = computeContentWidth();
+    const arr = displayText.split(/\r?\n/);
+    if (arr.length && arr[arr.length - 1] === '') arr.pop();
+    const units = new Array(arr.length);
+    let totalUnits = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const u = estimateWrapUnitsForLine(arr[i], ctx, cw, lh);
+      units[i] = u;
+      totalUnits += u;
+    }
+    const prefix = new Array(arr.length);
+    let acc = 0;
+    for (let i = 0; i < arr.length; i++) { acc += units[i]; prefix[i] = acc; }
+    virt.wrapUnits = units;
+    virt.wrapPrefix = prefix;
+    virt.totalLines = arr.length;
+    virt.contentWidth = cw;
+    return { totalUnits: totalUnits, lines: arr };
+  } catch(e) { return null; }
+}
+function binarySearchPrefix(prefix, value){
+  let lo = 0, hi = prefix.length - 1, ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (prefix[mid] >= value) { ans = mid; hi = mid - 1; }
+    else { lo = mid + 1; }
+  }
+  return ans;
+}
 function shouldVirtualize(text){
   if (importMode) return false;
-  if (isSoftWrapOn()) return false;
   if (!text) return false;
   try {
-    const n = (text.match(/\n/g) || []).length + 1;
-    return n >= VIRT_MIN_LINES;
+    if (isSoftWrapOn()) {
+      // 软换行：通过折行单元估算阈值
+      if (!virt.wrapUnits || virtLastDisplayText !== text) {
+        virt.lineHeight = virt.lineHeight || measureLineHeight();
+        const res = ensureWrapUnits(text);
+        if (!res) return false;
+        return res.totalUnits >= VIRT_MIN_UNITS;
+      } else {
+        const lastTotalUnits = virt.wrapPrefix && virt.wrapPrefix.length ? virt.wrapPrefix[virt.wrapPrefix.length - 1] : 0;
+        return lastTotalUnits >= VIRT_MIN_UNITS;
+      }
+    } else {
+      const n = (text.match(/\n/g) || []).length + 1;
+      return n >= VIRT_MIN_LINES;
+    }
   } catch(e) { return false; }
 }
 function virtualRebuild(displayText){
-  if (!displayText) { logEl.innerHTML = ''; virt = { lineHeight: virt.lineHeight || 18, totalLines: 0, first: 0, last: 0 }; return; }
+  if (!displayText) { logEl.innerHTML = ''; virt.totalLines = 0; virt.first = 0; virt.last = 0; virt.wrapUnits = null; virt.wrapPrefix = null; return; }
   if (!virt.lineHeight || virt.lineHeight <= 0) virt.lineHeight = measureLineHeight();
   const lh = virt.lineHeight || 18;
-  const arr = displayText.split(/\r?\n/);
+  const viewTop = logEl.scrollTop;
+  const viewH = logEl.clientHeight || 0;
+  const extraUnits = Math.max(5, Math.floor(VIRT_BUFFER_PX / lh));
+  let arr;
+  // 软换行模式：用折行单元映射
+  if (isSoftWrapOn()) {
+    if (!virt.wrapUnits || virt.contentWidth !== computeContentWidth() || virtLastDisplayText !== displayText) {
+      const res = ensureWrapUnits(displayText);
+      if (!res) { // 回退为整渲染
+        logEl.innerHTML = renderHtmlFromText(displayText);
+        return;
+      }
+      arr = res.lines;
+    } else {
+      arr = displayText.split(/\r?\n/);
+      if (arr.length && arr[arr.length - 1] === '') arr.pop();
+    }
+    const prefix = virt.wrapPrefix || [];
+    const totalUnits = prefix.length ? prefix[prefix.length - 1] : 0;
+    const startUnit = Math.max(0, Math.floor(viewTop / lh) - extraUnits);
+    const endUnit = Math.min(totalUnits, Math.ceil((viewTop + viewH) / lh) + extraUnits);
+    const first = prefix.length ? binarySearchPrefix(prefix, startUnit + 1) : 0;
+    const lastIdx = prefix.length ? binarySearchPrefix(prefix, endUnit) : 0;
+    const last = Math.min(arr.length, lastIdx + 1);
+    virt.first = first; virt.last = last; virt.totalLines = arr.length;
+    const unitsBefore = first > 0 ? prefix[first - 1] : 0;
+    const unitsAfter = totalUnits - (last > 0 ? prefix[last - 1] : 0);
+    const topH = unitsBefore * lh;
+    const bottomH = Math.max(0, unitsAfter * lh);
+    const visible = arr.slice(first, last).join('\n');
+    const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
+    logEl.innerHTML = '<div class="spacer" style="height:' + topH + 'px"></div>' + renderHtmlFromText(visible) + '<div class="spacer" style="height:' + bottomH + 'px"></div>';
+    if (preserveScrollNextRebuild && prevScrollTop != null) {
+      try { logEl.scrollTop = prevScrollTop; } catch(e){}
+      preserveScrollNextRebuild = false;
+    }
+    return;
+  }
+  // 非软换行：固定行高路径
+  arr = displayText.split(/\r?\n/);
   if (arr.length && arr[arr.length - 1] === '') arr.pop();
   virt.totalLines = arr.length;
   const extra = Math.max(5, Math.floor(VIRT_BUFFER_PX / lh));
-  const viewTop = logEl.scrollTop;
-  const viewH = logEl.clientHeight || 0;
   let first = Math.max(0, Math.floor(viewTop / lh) - extra);
   let last = Math.min(virt.totalLines, Math.ceil((viewTop + viewH) / lh) + extra);
   virt.first = first; virt.last = last;
@@ -354,12 +481,19 @@ function scrollToFindIndex(){
   try {
     const pre = (backlogText || '').slice(0, m.start);
     const lineNum = pre.split(/\n/).length; // 1-based
-    // 虚拟化启用时，直接按行高滚动；否则使用 DOM 定位
+    // 虚拟化启用时，按行高/折行单元滚动；否则使用 DOM 定位
     if (shouldVirtualize(virtLastDisplayText || (filterText ? filterTextChunk(backlogText) : backlogText))) {
       if (!virt.lineHeight || virt.lineHeight <= 0) virt.lineHeight = measureLineHeight();
       const lh = virt.lineHeight || 18;
-      const idx = Math.max(0, lineNum - 1);
-      const targetTop = Math.max(0, Math.round(idx * lh - (logEl.clientHeight / 2)));
+      let targetTop = 0;
+      if (isSoftWrapOn() && virt.wrapPrefix && virt.wrapPrefix.length) {
+        const idx = Math.max(0, Math.min(virt.wrapPrefix.length - 1, lineNum - 1));
+        const unitsBefore = idx > 0 ? virt.wrapPrefix[idx - 1] : 0;
+        targetTop = Math.max(0, Math.round(unitsBefore * lh - (logEl.clientHeight / 2)));
+      } else {
+        const idx = Math.max(0, lineNum - 1);
+        targetTop = Math.max(0, Math.round(idx * lh - (logEl.clientHeight / 2)));
+      }
       logEl.scrollTop = targetTop;
       scheduleVirtualRepaint();
     } else {
@@ -907,11 +1041,10 @@ function scheduleRebuild(){
     const stick = autoFollow && isAtBottom();
     const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
-    // 优先处理虚拟化渲染（未开启软换行且行数较大）
+    // 优先处理虚拟化渲染（支持软换行：使用折行单元估算）
     if (shouldVirtualize(text)) {
       virtLastDisplayText = text;
-      // 虚拟化模式关闭软换行样式
-      logEl.classList.remove('wrap');
+      // 虚拟化渲染自身处理高度与布局，容器样式无需强制移除 wrap
       virtualRebuild(text);
     } else {
       virtLastDisplayText = text; // 仍然缓存，便于滚动时判断

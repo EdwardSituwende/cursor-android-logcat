@@ -18,6 +18,7 @@ export type StartMessage = {
 };
 export type PauseMessage = { type: 'pause' };
 export type StopMessage = { type: 'stop' };
+export type RestartMessage = { type: 'restart'; serial?: string };
 export type ExportLogsMessage = { type: 'exportLogs' };
 export type ImportLogsMessage = { type: 'importLogs' };
 
@@ -30,6 +31,7 @@ export type IncomingWebviewMessage =
   | StartMessage
   | PauseMessage
   | StopMessage
+  | RestartMessage
   | ExportLogsMessage
   | ImportLogsMessage;
 

@@ -277,6 +277,25 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           this.streamSvc.pause();
           break;
         }
+          case 'restart': {
+            try {
+              const serial = String((msg as any).serial || this.currentSelectedSerial || '').trim();
+              if (!serial) {
+                this.post({ type: 'status', text: '请先选择设备' });
+                break;
+              }
+              this.post({ type: 'status', text: '正在重启 logcat…' });
+              // 复用现有启动逻辑：停止并用最近配置重新启动
+              this.startStreamForSerial(serial);
+              // 可选：加载少量历史以对齐 Android Studio 行为
+              try {
+                const text = await this.dumpHistory(serial, 2000);
+                this.post({ type: 'historyDump', text });
+              } catch {}
+              this.post({ type: 'status', text: '已重启' });
+            } catch {}
+            break;
+          }
         case 'exportLogs': {
           const plainText: string = String(msg.text || '');
           const suggested: string = String(msg.suggested || 'AndroidLog.txt');
@@ -316,12 +335,13 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             const file = uri[0];
             const data = await vscode.workspace.fs.readFile(file);
             const text = Buffer.from(data).toString('utf8');
-            // 发送到前端显示（不混淆历史标志）
-            this.post({ type: 'importDump', text });
-            // 进入导入模式：停止实时抓取，传递显示名称
+            // 进入导入模式：先停止实时抓取
             try { this.streamSvc.stop(); } catch {}
             const name = extractFileName(file.fsPath);
+            // 通知前端切换导入模式（按钮置灰等）
             this.post({ type: 'importMode', name });
+            // 下发导入内容（放在 importMode 之后，前端将清理缓冲避免残留）
+            this.post({ type: 'importDump', text });
             this.importActive = true;
             this.post({ type: 'status', text: '已导入日志: ' + file.fsPath });
           } catch (e) {

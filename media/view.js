@@ -6,6 +6,7 @@ const toggleBtn = $('toggle');
 const clearBtn = $('clear');
 const exportBtn = $('export');
 const importBtn = $('import');
+const restartBtn = $('restart');
 const scrollEndBtn = $('scrollEnd');
 const logEl = $('log');
 const findBar = $('findBar');
@@ -535,8 +536,31 @@ function setDevices(devs, defaultSerial){
 window.addEventListener('message', (e) => {
   const msg = e.data;
   switch(msg.type){
-    case 'status': setStatus(msg.text); applyPausedStateFromStatus(msg.text); break;
-    case 'append': append(msg.text); break;
+    case 'status':
+      setStatus(msg.text);
+      applyPausedStateFromStatus(msg.text);
+      try {
+        const text = String(msg.text || '');
+        if (text.indexOf('已重启') !== -1 && !importMode) {
+          // 强力刷新：重新请求历史并刷新设备列表
+          if (deviceSel && deviceSel.value) {
+            vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
+          }
+          vscode.postMessage({ type: 'refreshDevices' });
+        }
+        // 导入模式下屏蔽“已退出/已停止/启动”等状态触发的视图/历史变动
+        if (importMode && (/已退出|已停止|启动:/.test(text))) {
+          return;
+        }
+      } catch(e){}
+      break;
+    case 'append':
+      if (importMode) {
+        // 导入模式下忽略实时追加，保持导入内容静态展示
+        break;
+      }
+      append(msg.text);
+      break;
     case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
     case 'pidMap':
       try {
@@ -560,18 +584,62 @@ window.addEventListener('message', (e) => {
       // 包名变化影响整列布局，需要重建
       scheduleRebuild();
       break;
-    case 'importDump':
+    case 'importDump': {
       // 导入文本：清空现有显示与缓存，直接渲染导入内容
-      backlogText = msg.text || '';
+      let text = String(msg.text || '');
+      // 对超大导入做尾部截断，避免一次性渲染过大内容导致空白
+      const MAX_IMPORT_CHARS = MAX_LOG_TEXT_LENGTH; // 约2MB
+      const MAX_IMPORT_LINES = 50000;
+      if (text.length > MAX_IMPORT_CHARS) {
+        text = text.slice(text.length - MAX_IMPORT_CHARS);
+        // 对齐到换行，避免半行开头
+        const firstNl = text.indexOf('\n');
+        if (firstNl > 0) text = text.slice(firstNl + 1);
+      }
+      // 进一步限制行数
+      try {
+        const lines = text.split(/\r?\n/);
+        if (lines.length > MAX_IMPORT_LINES) {
+          text = lines.slice(lines.length - MAX_IMPORT_LINES).join('\n');
+        }
+      } catch(e){}
+      backlogText = text;
       historyLoaded = true;
-      scheduleRebuild();
-      break;
+      // 重置视图为导入内容（考虑过滤器可能为空或已清空）
+      const display = filterText ? filterTextChunk(backlogText) : backlogText;
+      logEl.innerHTML = renderHtmlFromText(display);
+      // 进入导入后固定开启软换行
+      if (softWrapBtn) softWrapBtn.setAttribute('aria-pressed','true');
+      logEl.classList.add('wrap');
+      // 滚动到底，避免上方残留
+      try { logEl.scrollTop = logEl.scrollHeight; } catch(e){}
+      // 在状态栏提示
+      try { setStatus('已显示导入日志（约 ' + Math.max(0, text.split(/\n/).length - 1) + ' 行）'); } catch(e){}
+      break; }
     case 'importMode':
       importMode = true;
       importName = truncateMiddle(String(msg.name || 'Imported.txt'), 48);
-      // 置灰暂停按钮
+      // 置灰：暂停/重启/清空
       toggleBtn.setAttribute('disabled', 'true');
       toggleBtn.classList.add('disabled');
+      if (restartBtn) { restartBtn.setAttribute('disabled','true'); restartBtn.classList.add('disabled'); }
+      if (clearBtn) { clearBtn.setAttribute('disabled','true'); clearBtn.classList.add('disabled'); }
+      // 清理任何未刷新的实时缓冲，避免导入后残留动态日志
+      pendingWhileNotFollowing = '';
+      queuedAppend = '';
+      flushScheduled = false;
+  // 清空可见区并重置 backlog，确保导入文本为唯一来源
+  logEl.innerHTML = '';
+  backlogText = '';
+  // 清除过滤条件，避免导入后被旧过滤规则过滤成空
+  try {
+    filterText = '';
+    if (filterInput) filterInput.value = '';
+    compileFilterAst(filterText);
+    if (filterInput && filterInput.parentElement && filterInput.parentElement.classList) {
+      filterInput.parentElement.classList.remove('has-value');
+    }
+  } catch(e){}
       setStatus('已进入导入模式');
       // 用导入项刷新设备列表顶部显示
       setDevices([], '');
@@ -615,6 +683,8 @@ deviceSel.addEventListener('change', () => {
     importName = '';
     toggleBtn.removeAttribute('disabled');
     toggleBtn.classList.remove('disabled');
+    if (restartBtn) { restartBtn.removeAttribute('disabled'); restartBtn.classList.remove('disabled'); }
+    if (clearBtn) { clearBtn.removeAttribute('disabled'); clearBtn.classList.remove('disabled'); }
     // 通知后端取消导入状态
     try { vscode.postMessage({ type: 'status', text: '退出导入模式' }); } catch(e){}
   }
@@ -687,6 +757,7 @@ function setToggleUi(paused){
 }
 
 toggleBtn.addEventListener('click', () => {
+  if (importMode) return;
   if (uiPaused) {
     // 恢复
     vscode.postMessage({
@@ -703,6 +774,16 @@ toggleBtn.addEventListener('click', () => {
     // 实际文案切换在收到“已暂停”状态后处理
   }
 });
+
+// Restart：停止并基于当前选择与上次配置重新启动
+if (restartBtn) {
+  restartBtn.addEventListener('click', () => {
+    if (importMode) return;
+    setStatus('正在重启…');
+    vscode.postMessage({ type: 'restart', serial: deviceSel.value });
+    dlog('[click] restart');
+  });
+}
 
 // 绑定清空与导出按钮
 clearBtn.addEventListener('click', clearLog);
@@ -918,6 +999,10 @@ window.addEventListener('load', () => {
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (msg && msg.type === 'historyDump') {
+    if (importMode) {
+      // 导入模式下忽略任何实时历史下发，避免覆盖导入内容
+      return;
+    }
     backlogText = msg.text || '';
     historyLoaded = true;
     scheduleRebuild();

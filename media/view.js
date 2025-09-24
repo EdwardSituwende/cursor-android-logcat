@@ -72,6 +72,63 @@ let findQuery = '';
 let findMatches = [];
 let findIndex = 0;
 let preserveScrollNextRebuild = false;
+// --- 视口虚拟化（仅未开启软换行时启用） ---
+let virtLastDisplayText = '';
+let virtRepaintScheduled = false;
+const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化
+const VIRT_BUFFER_PX = 800;  // 视口上下各缓存约 800px 的内容
+let virt = { lineHeight: 18, totalLines: 0, first: 0, last: 0 };
+function isSoftWrapOn(){ return !!(softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true'); }
+function measureLineHeight(){
+  try {
+    const probe = document.createElement('span');
+    probe.textContent = 'A';
+    logEl.appendChild(probe);
+    const h = probe.offsetHeight || 18;
+    logEl.removeChild(probe);
+    return h;
+  } catch(e) { return 18; }
+}
+function shouldVirtualize(text){
+  if (importMode) return false;
+  if (isSoftWrapOn()) return false;
+  if (!text) return false;
+  try {
+    const n = (text.match(/\n/g) || []).length + 1;
+    return n >= VIRT_MIN_LINES;
+  } catch(e) { return false; }
+}
+function virtualRebuild(displayText){
+  if (!displayText) { logEl.innerHTML = ''; virt = { lineHeight: virt.lineHeight || 18, totalLines: 0, first: 0, last: 0 }; return; }
+  if (!virt.lineHeight || virt.lineHeight <= 0) virt.lineHeight = measureLineHeight();
+  const lh = virt.lineHeight || 18;
+  const arr = displayText.split(/\r?\n/);
+  if (arr.length && arr[arr.length - 1] === '') arr.pop();
+  virt.totalLines = arr.length;
+  const extra = Math.max(5, Math.floor(VIRT_BUFFER_PX / lh));
+  const viewTop = logEl.scrollTop;
+  const viewH = logEl.clientHeight || 0;
+  let first = Math.max(0, Math.floor(viewTop / lh) - extra);
+  let last = Math.min(virt.totalLines, Math.ceil((viewTop + viewH) / lh) + extra);
+  virt.first = first; virt.last = last;
+  const topH = first * lh;
+  const bottomH = Math.max(0, (virt.totalLines - last) * lh);
+  const visible = arr.slice(first, last).join('\n');
+  const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
+  logEl.innerHTML = '<div class="spacer" style="height:' + topH + 'px"></div>' + renderHtmlFromText(visible) + '<div class="spacer" style="height:' + bottomH + 'px"></div>';
+  if (preserveScrollNextRebuild && prevScrollTop != null) {
+    try { logEl.scrollTop = prevScrollTop; } catch(e){}
+    preserveScrollNextRebuild = false;
+  }
+}
+function scheduleVirtualRepaint(){
+  if (virtRepaintScheduled) return;
+  virtRepaintScheduled = true;
+  requestAnimationFrame(() => {
+    virtRepaintScheduled = false;
+    if (virtLastDisplayText) virtualRebuild(virtLastDisplayText);
+  });
+}
 // 颜色渲染：转义与按行着色
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
@@ -212,16 +269,21 @@ function scheduleFlush(){
     }
     // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝；若有过滤器，则仅追加匹配子集
     const displayChunk = filterText ? filterTextChunk(queuedAppend) : queuedAppend;
-    if (displayChunk) {
-      // 追加高亮 HTML
+    // 若启用虚拟化，则不直接 append，转为一次重建以维持占位结构
+    const virtOn = shouldVirtualize(filterText ? (filterTextChunk(backlogText)) : backlogText);
+    if (!virtOn && displayChunk) {
+      // 追加高亮 HTML（非虚拟化路径）
       logEl.insertAdjacentHTML('beforeend', renderHtmlFromText(displayChunk));
+    } else {
+      virtLastDisplayText = '';
+      scheduleRebuild();
     }
     dlog('[flush] appended len=', queuedAppend.length, 'stick=', stick);
     queuedAppend = '';
     // 若超长，直接基于 backlog 重建，避免混合裁剪破坏标记
     if (backlogText.length >= MAX_LOG_TEXT_LENGTH) {
-      const text = filterText ? filterTextChunk(backlogText) : backlogText;
-      logEl.innerHTML = renderHtmlFromText(text);
+      virtLastDisplayText = '';
+      scheduleRebuild();
     }
     // 持久化前端状态
     scheduleSaveState();
@@ -292,9 +354,19 @@ function scrollToFindIndex(){
   try {
     const pre = (backlogText || '').slice(0, m.start);
     const lineNum = pre.split(/\n/).length; // 1-based
-    const lines = logEl.querySelectorAll('span');
-    const target = lines[lineNum - 1];
-    if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // 虚拟化启用时，直接按行高滚动；否则使用 DOM 定位
+    if (shouldVirtualize(virtLastDisplayText || (filterText ? filterTextChunk(backlogText) : backlogText))) {
+      if (!virt.lineHeight || virt.lineHeight <= 0) virt.lineHeight = measureLineHeight();
+      const lh = virt.lineHeight || 18;
+      const idx = Math.max(0, lineNum - 1);
+      const targetTop = Math.max(0, Math.round(idx * lh - (logEl.clientHeight / 2)));
+      logEl.scrollTop = targetTop;
+      scheduleVirtualRepaint();
+    } else {
+      const lines = logEl.querySelectorAll('span');
+      const target = lines[lineNum - 1];
+      if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   } catch(e){}
 }
 function alignFindIndexToViewport(){
@@ -715,6 +787,10 @@ logEl.addEventListener('scroll', () => {
       dlog('[scroll] follow=false');
     }
   }
+  // 视口虚拟化：滚动时按需重绘可见窗口
+  if (virtLastDisplayText) {
+    scheduleVirtualRepaint();
+  }
 });
 
 // 快捷恢复：双击日志区域、点击状态栏、按 End 键
@@ -831,22 +907,31 @@ function scheduleRebuild(){
     const stick = autoFollow && isAtBottom();
     const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
-    logEl.innerHTML = renderHtmlFromText(text);
-    // 导入模式默认开启软换行
-    if (importMode) {
-      logEl.classList.add('wrap');
-      if (softWrapBtn) {
-        softWrapBtn.setAttribute('aria-pressed','true');
-      }
-    }
-    if (softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true') {
-      logEl.classList.add('wrap');
-    } else {
+    // 优先处理虚拟化渲染（未开启软换行且行数较大）
+    if (shouldVirtualize(text)) {
+      virtLastDisplayText = text;
+      // 虚拟化模式关闭软换行样式
       logEl.classList.remove('wrap');
-    }
-    if (preserveScrollNextRebuild && prevScrollTop != null) {
-      try { logEl.scrollTop = prevScrollTop; } catch(e){}
-      preserveScrollNextRebuild = false;
+      virtualRebuild(text);
+    } else {
+      virtLastDisplayText = text; // 仍然缓存，便于滚动时判断
+      logEl.innerHTML = renderHtmlFromText(text);
+      // 导入模式默认开启软换行
+      if (importMode) {
+        logEl.classList.add('wrap');
+        if (softWrapBtn) {
+          softWrapBtn.setAttribute('aria-pressed','true');
+        }
+      }
+      if (softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true') {
+        logEl.classList.add('wrap');
+      } else {
+        logEl.classList.remove('wrap');
+      }
+      if (preserveScrollNextRebuild && prevScrollTop != null) {
+        try { logEl.scrollTop = prevScrollTop; } catch(e){}
+        preserveScrollNextRebuild = false;
+      }
     }
     if (stick) logEl.scrollTop = logEl.scrollHeight;
   });

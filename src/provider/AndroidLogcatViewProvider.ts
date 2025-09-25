@@ -102,9 +102,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             if (isOnline && !this.streamSvc.isRunning()) {
               this.post({ type: 'status', text: '设备已恢复在线，正在自动启动…' });
               this.startStreamForSerial(this.currentSelectedSerial);
-              const text = await this.dumpHistory(this.currentSelectedSerial, 5000);
-              this.post({ type: 'historyDump', text });
-              this.post({ type: 'status', text: '历史日志已加载' });
+              // 历史日志改由前端按需请求，避免与实时流重叠导致重复
             }
           }
         } catch {}
@@ -218,15 +216,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
                 this.post({ type: 'status', text: '设备已上线，正在启动…' });
                 this.startStreamForSerial(serial);
                 this.pidMapSvc?.start(1000);
-                // 加载一次历史
-                this.post({ type: 'status', text: '正在加载历史日志...' });
-                try {
-                  const text = await this.dumpHistory(serial, 10000);
-                  this.post({ type: 'historyDump', text });
-                  this.post({ type: 'status', text: '历史日志已加载' });
-                } catch {
-                  this.post({ type: 'status', text: '加载历史日志失败' });
-                }
+                // 历史日志改由前端按需请求
                 return;
               }
             }
@@ -285,13 +275,8 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
                 break;
               }
               this.post({ type: 'status', text: '正在重启 logcat…' });
-              // 复用现有启动逻辑：停止并用最近配置重新启动
+              // 停止并用最近配置重新启动；历史由前端请求
               this.startStreamForSerial(serial);
-              // 可选：加载少量历史以对齐 Android Studio 行为
-              try {
-                const text = await this.dumpHistory(serial, 2000);
-                this.post({ type: 'historyDump', text });
-              } catch {}
               this.post({ type: 'status', text: '已重启' });
             } catch {}
             break;

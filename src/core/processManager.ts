@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
-export type StartOptions = { serial: string; pkg: string; tag: string; level: string; buffer: string; save?: boolean };
+export type StartOptions = { serial: string; pkg: string; tag: string; level: string; buffer: string; save?: boolean; since?: string };
 
 export class ProcessManager {
   private currentProc: ChildProcessWithoutNullStreams | null = null;
@@ -15,6 +15,8 @@ export class ProcessManager {
   private appendFlushTimer: NodeJS.Timeout | null = null;
   private readonly APPEND_FLUSH_INTERVAL_MS = 33;
   private readonly APPEND_SIZE_THRESHOLD = 64 * 1024;
+  private lastEmittedLine = ""; // 用于相邻去重
+  private carryOverFragment = ""; // 上一批未以换行结束的残片
 
   private lastOpts: StartOptions | null = null;
   private lastPid: string = '';
@@ -57,6 +59,7 @@ export class ProcessManager {
     if (opts.buffer) args.push('-b', opts.buffer);
     args.push('--no-color');
     if (opts.save) args.push('-f');
+    if (opts.since && opts.since.trim()) args.push('--since', opts.since.trim());
 
     this.lastOpts = opts;
     this.lastPid = '';
@@ -183,13 +186,50 @@ export class ProcessManager {
       this.cancelAppendFlushTimer();
       return;
     }
+    const textToEmit = this.dedupeAdjacentLines(this.pendingAppend);
     if (this.isVisible()) {
-      this.onAppend(this.pendingAppend);
+      if (textToEmit) this.onAppend(textToEmit);
     } else {
       this.bufferedWhileHidden += this.pendingAppend;
     }
     this.pendingAppend = "";
     this.cancelAppendFlushTimer();
+  }
+
+  private dedupeAdjacentLines(chunk: string): string {
+    try {
+      if (!chunk) return "";
+      let text = chunk;
+      // 若存在上批未结束的行残片，则与本批首行拼接后再参与去重
+      if (this.carryOverFragment) {
+        text = this.carryOverFragment + text;
+        this.carryOverFragment = "";
+      }
+      const endsWithNl = /\n$/.test(text);
+      const lines = text.split(/\n/);
+      // 若不以换行结尾，最后一项是残片，暂不用于“完整行”去重
+      const lastIndex = lines.length - 1;
+      const out: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const isTailFragment = (i === lastIndex) && !endsWithNl;
+        if (isTailFragment) {
+          // 暂存残片等待下一批补全
+          this.carryOverFragment = lines[i];
+          break;
+        }
+        const line = lines[i];
+        if (line === this.lastEmittedLine) {
+          continue; // 丢弃与上一条完全相同的相邻行
+        }
+        out.push(line);
+        this.lastEmittedLine = line;
+      }
+      // 重新拼接并恢复末尾换行
+      const joined = out.join('\n');
+      return joined + (joined && endsWithNl ? '\n' : (endsWithNl ? '\n' : ''));
+    } catch {
+      return chunk; // 兜底：异常时不做去重
+    }
   }
 
   private cancelAppendFlushTimer() {

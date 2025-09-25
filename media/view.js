@@ -726,11 +726,7 @@ function setDevices(devs, defaultSerial){
   } catch(e){}
   // 设备选择也持久化一次
   scheduleSaveState();
-  // 切回面板后设备列表到位：若尚未加载历史，则拉取一次
-  if (!historyLoaded && deviceSel.value) {
-    dlog('[history] request after devices');
-    vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
-  }
+  // 保持按需加载：不在设备列表到位时自动请求历史，避免与实时流重叠
   // 若首次填充设备后尚未启动过抓取，且此时已有选中设备，则提示一次“准备就绪”
   try {
     if (deviceSel && deviceSel.value && !historyLoaded) {
@@ -747,13 +743,10 @@ window.addEventListener('message', (e) => {
       applyPausedStateFromStatus(msg.text);
       try {
         const text = String(msg.text || '');
-        if (text.indexOf('已重启') !== -1 && !importMode) {
-          // 强力刷新：重新请求历史并刷新设备列表
-          if (deviceSel && deviceSel.value) {
-            vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
-          }
-          vscode.postMessage({ type: 'refreshDevices' });
-        }
+    if (text.indexOf('已重启') !== -1 && !importMode) {
+      // 仅刷新设备列表；历史加载交由用户操作或过滤触发
+      vscode.postMessage({ type: 'refreshDevices' });
+    }
         // 导入模式下屏蔽“已退出/已停止/启动”等状态触发的视图/历史变动
         if (importMode && (/已退出|已停止|启动:/.test(text))) {
           return;

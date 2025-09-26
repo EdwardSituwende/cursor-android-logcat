@@ -540,14 +540,20 @@ function scheduleFlush(){
     }
     // 以文本节点追加，避免 textContent+= 造成 O(n) 拷贝；若有过滤器，则仅追加匹配子集
     const displayChunk = filterText ? filterTextChunk(queuedAppend) : queuedAppend;
+    // 预先计算追加后的可见文本；若过滤后没有任何新增可见内容，则避免无意义的重建
+    const nextDisplayText = filterText ? filterTextChunk(backlogText) : backlogText;
     // 若启用虚拟化，则不直接 append，转为一次重建以维持占位结构
-    const virtOn = shouldVirtualize(filterText ? (filterTextChunk(backlogText)) : backlogText);
-    if (!virtOn && displayChunk) {
+    const virtOn = shouldVirtualize(nextDisplayText);
+    if (!clusterMode && !virtOn && displayChunk) {
       // 追加高亮 HTML（非虚拟化路径）
       logEl.insertAdjacentHTML('beforeend', renderHtmlFromText(displayChunk));
+      virtLastDisplayText = nextDisplayText; // 与当前视图保持一致，避免下一次误判
     } else {
-      virtLastDisplayText = '';
-      scheduleRebuild();
+      // 仅当可见文本实际发生变化时才重建，避免“过滤命中为空”场景下的抽动
+      if (nextDisplayText !== virtLastDisplayText) {
+        virtLastDisplayText = '';
+        scheduleRebuild();
+      }
     }
     dlog('[flush] appended len=', queuedAppend.length, 'stick=', stick);
     queuedAppend = '';
@@ -586,6 +592,9 @@ function closeFind(){
   findBar.hidden = true;
   findVisible = false;
   try { logEl.classList.remove('has-find'); } catch(e){}
+  // 退出搜索时移除所有高亮：重建视图并保持当前位置
+  preserveScrollNextRebuild = true;
+  scheduleRebuild();
 }
 function recomputeFind(){
   findQuery = String(findInput.value || '');
@@ -879,102 +888,92 @@ function setDevices(devs, defaultSerial){
   } catch(e){}
 }
 
+// --- 统一消息分发：便于后续维护扩展 ---
+const Msg = { handlers: Object.create(null) };
+function onMessage(type, handler){ Msg.handlers[type] = handler; }
 window.addEventListener('message', (e) => {
-  const msg = e.data;
-  switch(msg.type){
-    case 'status':
-      setStatus(msg.text);
-      applyPausedStateFromStatus(msg.text);
-      try {
-        const text = String(msg.text || '');
+  try {
+    const m = e.data || {};
+    const h = Msg.handlers[m.type];
+    if (typeof h === 'function') h(m);
+  } catch(e){}
+});
+
+onMessage('status', (msg) => {
+  setStatus(msg.text);
+  applyPausedStateFromStatus(msg.text);
+  try {
+    const text = String(msg.text || '');
     if (text.indexOf('已重启') !== -1 && !importMode) {
-      // 仅刷新设备列表；历史加载交由用户操作或过滤触发
       vscode.postMessage({ type: 'refreshDevices' });
     }
-        // 导入模式下屏蔽“已退出/已停止/启动”等状态触发的视图/历史变动
-        if (importMode && (/已退出|已停止|启动:/.test(text))) {
-          return;
-        }
-      } catch(e){}
-      break;
-    case 'append':
-      if (importMode) {
-        // 导入模式下忽略实时追加，保持导入内容静态展示
-        break;
-      }
-      append(msg.text);
-      break;
-    case 'devices': setDevices(msg.devices, msg.defaultSerial); break;
-    case 'pidMap':
-      try {
-        const map = msg.map || {};
-        for (const k in map) { if (Object.prototype.hasOwnProperty.call(map,k)) pidMap.set(Number(k), String(map[k])); }
-        // 新的 PID 映射可能影响已渲染行：标记脏并在下一帧/最小时间窗后统一重建，避免抖动
-        pidMapDirty = true;
-        if (!pidMapRebuildTimer) {
-          pidMapRebuildTimer = setTimeout(() => {
-            pidMapRebuildTimer = null;
-            if (pidMapDirty) {
-              pidMapDirty = false;
-              scheduleRebuild();
-            }
-          }, 50); // 50ms 时间窗内的多次更新合并
-        }
-      } catch(e){}
-      break;
-    case 'config':
-      try { currentPackage = String((msg.config && msg.config.pkg) || ''); } catch(e) { currentPackage = ''; }
-      // 包名变化影响整列布局，需要重建
-      scheduleRebuild();
-      break;
-    case 'importDump': {
-      // 导入文本：清空现有显示与缓存，直接渲染导入内容
-      let text = String(msg.text || '');
-      // 对超大导入做尾部截断，避免一次性渲染过大内容导致空白
-      const MAX_IMPORT_CHARS = MAX_LOG_TEXT_LENGTH; // 约2MB
-      const MAX_IMPORT_LINES = 50000;
-      if (text.length > MAX_IMPORT_CHARS) {
-        text = text.slice(text.length - MAX_IMPORT_CHARS);
-        // 对齐到换行，避免半行开头
-        const firstNl = text.indexOf('\n');
-        if (firstNl > 0) text = text.slice(firstNl + 1);
-      }
-      // 进一步限制行数
-      try {
-        const lines = text.split(/\r?\n/);
-        if (lines.length > MAX_IMPORT_LINES) {
-          text = lines.slice(lines.length - MAX_IMPORT_LINES).join('\n');
-        }
-      } catch(e){}
-      backlogText = text;
-      historyLoaded = true;
-      // 重置视图为导入内容（考虑过滤器可能为空或已清空）
-      const display = filterText ? filterTextChunk(backlogText) : backlogText;
-      logEl.innerHTML = renderHtmlFromText(display);
-      // 进入导入后固定开启软换行
-      if (softWrapBtn) softWrapBtn.setAttribute('aria-pressed','true');
-      logEl.classList.add('wrap');
-      // 滚动到底，避免上方残留
-      try { logEl.scrollTop = logEl.scrollHeight; } catch(e){}
-      // 在状态栏提示
-      try { setStatus('已显示导入日志（约 ' + Math.max(0, text.split(/\n/).length - 1) + ' 行）'); } catch(e){}
-      break; }
-    case 'importMode':
-      importMode = true;
-      importName = truncateMiddle(String(msg.name || 'Imported.txt'), 48);
-      // 置灰：暂停/重启/清空
-      toggleBtn.setAttribute('disabled', 'true');
-      toggleBtn.classList.add('disabled');
-      if (restartBtn) { restartBtn.setAttribute('disabled','true'); restartBtn.classList.add('disabled'); }
-      if (clearBtn) { clearBtn.setAttribute('disabled','true'); clearBtn.classList.add('disabled'); }
-      // 清理任何未刷新的实时缓冲，避免导入后残留动态日志
-      pendingWhileNotFollowing = '';
-      queuedAppend = '';
-      flushScheduled = false;
-  // 清空可见区并重置 backlog，确保导入文本为唯一来源
+    if (importMode && (/已退出|已停止|启动:/.test(text))) return;
+  } catch(e){}
+});
+
+onMessage('append', (msg) => {
+  if (importMode) return;
+  append(msg.text);
+});
+
+onMessage('devices', (msg) => { setDevices(msg.devices, msg.defaultSerial); });
+
+onMessage('pidMap', (msg) => {
+  try {
+    const map = msg.map || {};
+    for (const k in map) { if (Object.prototype.hasOwnProperty.call(map,k)) pidMap.set(Number(k), String(map[k])); }
+    pidMapDirty = true;
+    if (!pidMapRebuildTimer) {
+      pidMapRebuildTimer = setTimeout(() => {
+        pidMapRebuildTimer = null;
+        if (pidMapDirty) { pidMapDirty = false; scheduleRebuild(); }
+      }, 50);
+    }
+  } catch(e){}
+});
+
+onMessage('config', (msg) => {
+  try { currentPackage = String((msg.config && msg.config.pkg) || ''); } catch(e) { currentPackage = ''; }
+  scheduleRebuild();
+});
+
+onMessage('importDump', (msg) => {
+  let text = String(msg.text || '');
+  const MAX_IMPORT_CHARS = MAX_LOG_TEXT_LENGTH;
+  const MAX_IMPORT_LINES = 50000;
+  if (text.length > MAX_IMPORT_CHARS) {
+    text = text.slice(text.length - MAX_IMPORT_CHARS);
+    const firstNl = text.indexOf('\n');
+    if (firstNl > 0) text = text.slice(firstNl + 1);
+  }
+  try {
+    const lines = text.split(/\r?\n/);
+    if (lines.length > MAX_IMPORT_LINES) {
+      text = lines.slice(lines.length - MAX_IMPORT_LINES).join('\n');
+    }
+  } catch(e){}
+  backlogText = text;
+  historyLoaded = true;
+  const display = filterText ? filterTextChunk(backlogText) : backlogText;
+  logEl.innerHTML = renderHtmlFromText(display);
+  if (softWrapBtn) softWrapBtn.setAttribute('aria-pressed','true');
+  logEl.classList.add('wrap');
+  try { logEl.scrollTop = logEl.scrollHeight; } catch(e){}
+  try { setStatus('已显示导入日志（约 ' + Math.max(0, text.split(/\n/).length - 1) + ' 行）'); } catch(e){}
+});
+
+onMessage('importMode', (msg) => {
+  importMode = true;
+  importName = truncateMiddle(String(msg.name || 'Imported.txt'), 48);
+  toggleBtn.setAttribute('disabled', 'true');
+  toggleBtn.classList.add('disabled');
+  if (restartBtn) { restartBtn.setAttribute('disabled','true'); restartBtn.classList.add('disabled'); }
+  if (clearBtn) { clearBtn.setAttribute('disabled','true'); clearBtn.classList.add('disabled'); }
+  pendingWhileNotFollowing = '';
+  queuedAppend = '';
+  flushScheduled = false;
   logEl.innerHTML = '';
   backlogText = '';
-  // 清除过滤条件，避免导入后被旧过滤规则过滤成空
   try {
     filterText = '';
     if (filterInput) filterInput.value = '';
@@ -983,38 +982,32 @@ window.addEventListener('message', (e) => {
       filterInput.parentElement.classList.remove('has-value');
     }
   } catch(e){}
-      setStatus('已进入导入模式');
-      // 用导入项刷新设备列表顶部显示
-      setDevices([], '');
-      break;
-    case 'debug': DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); break;
-    case 'visible':
-      // 面板重新可见：若还没有缓存，则尝试拉取一次历史
-      if (!historyLoaded && deviceSel.value) {
-        dlog('[history] request on visible');
-        vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
-      }
-      // 可见时若设备选择仍为空或显示“未检测到设备”，主动刷新一次设备列表
-      try {
-        const onlyOne = deviceSel && deviceSel.options && deviceSel.options.length === 1 ? deviceSel.options[0] : null;
-        const emptyShown = onlyOne && !onlyOne.value && /未检测到设备/.test(String(onlyOne.textContent || ''));
-        if (!deviceSel || !deviceSel.options || deviceSel.options.length === 0 || emptyShown) {
-          dlog('[devices] visible -> refresh because empty');
-          vscode.postMessage({ type: 'refreshDevices' });
-        }
-      } catch(e){}
-      // 关键：隐藏期间虚拟化缓存的尺寸可能失真，切回时强制一次重建
-      // 保持当前滚动位置，避免视觉抽动；同时让虚拟化重新计算上下占位高度
-      try {
-        preserveScrollNextRebuild = true;
-        // 让下一次虚拟化测量重新估算行高与折行单元
-        virt.lineHeight = 0; // 触发重新测量
-        virt.wrapUnits = null;
-        virt.wrapPrefix = null;
-      } catch(e){}
-      scheduleRebuild();
-      break;
+  setStatus('已进入导入模式');
+  setDevices([], '');
+});
+
+onMessage('debug', (msg) => { DEBUG = !!msg.enabled; dlog('DEBUG set to', DEBUG); });
+
+onMessage('visible', () => {
+  if (!historyLoaded && deviceSel.value) {
+    dlog('[history] request on visible');
+    vscode.postMessage({ type: 'requestHistory', serial: deviceSel.value });
   }
+  try {
+    const onlyOne = deviceSel && deviceSel.options && deviceSel.options.length === 1 ? deviceSel.options[0] : null;
+    const emptyShown = onlyOne && !onlyOne.value && /未检测到设备/.test(String(onlyOne.textContent || ''));
+    if (!deviceSel || !deviceSel.options || deviceSel.options.length === 0 || emptyShown) {
+      dlog('[devices] visible -> refresh because empty');
+      vscode.postMessage({ type: 'refreshDevices' });
+    }
+  } catch(e){}
+  try {
+    preserveScrollNextRebuild = true;
+    virt.lineHeight = 0;
+    virt.wrapUnits = null;
+    virt.wrapPrefix = null;
+  } catch(e){}
+  scheduleRebuild();
 });
 
 // 点击设备下拉框时，如果只有“未检测到设备”，则触发刷新
@@ -1195,6 +1188,10 @@ function scheduleRebuild(){
       // 虚拟化渲染自身处理高度与布局，容器样式无需强制移除 wrap
       virtualRebuild(text);
     } else {
+      // 若可见文本未变化且未处于“保持滚动”分支，则跳过重建，避免底部抽动
+      if (virtLastDisplayText === text && !preserveScrollNextRebuild && !forceStickOnce) {
+        return;
+      }
       virtLastDisplayText = text; // 仍然缓存，便于滚动时判断
       logEl.innerHTML = renderHtmlFromText(text);
       // 导入模式默认开启软换行

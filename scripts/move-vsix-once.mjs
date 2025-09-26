@@ -99,7 +99,13 @@ async function main() {
       const parsed = path.parse(toPath);
       toPath = path.join(parsed.dir, `${parsed.name}-${Date.now()}${parsed.ext}`);
     }
-    fs.renameSync(foundPath, toPath);
+    try {
+      fs.renameSync(foundPath, toPath);
+    } catch {
+      // 跨分区或被占用时回退为 copy
+      fs.copyFileSync(foundPath, toPath);
+      try { fs.unlinkSync(foundPath); } catch {}
+    }
     console.log(`[move-vsix] Moved ${foundName} to ${toPath}`);
   } catch (err) {
     // Do not fail packaging due to mover errors

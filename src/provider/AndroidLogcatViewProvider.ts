@@ -115,6 +115,9 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         this.proc.onVisible();
         // 避免频繁刷新：先让前端根据其缓存自行恢复，再异步刷新设备
         this.post({ type: 'visible' });
+        // 关键：切回可见时重新下发最近的配置，保证前端 currentPackage 恢复
+        // 否则渲染行时可能因为缺少包名上下文而显示空白包名
+        this.postLastConfigToWebview();
         queueMicrotask(() => this.refreshDevicesAsync());
         // 重新开启 PID 映射刷新（切回面板后 PID 可能变化，如 surfaceflinger 重启）
         this.pidMapSvc?.start(1000);

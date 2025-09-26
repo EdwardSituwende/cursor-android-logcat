@@ -1003,6 +1003,16 @@ window.addEventListener('message', (e) => {
           vscode.postMessage({ type: 'refreshDevices' });
         }
       } catch(e){}
+      // 关键：隐藏期间虚拟化缓存的尺寸可能失真，切回时强制一次重建
+      // 保持当前滚动位置，避免视觉抽动；同时让虚拟化重新计算上下占位高度
+      try {
+        preserveScrollNextRebuild = true;
+        // 让下一次虚拟化测量重新估算行高与折行单元
+        virt.lineHeight = 0; // 触发重新测量
+        virt.wrapUnits = null;
+        virt.wrapPrefix = null;
+      } catch(e){}
+      scheduleRebuild();
       break;
   }
 });
@@ -1279,7 +1289,9 @@ function scheduleSaveState(){
   requestAnimationFrame(() => {
     saveStateScheduled = false;
     try {
-      const softWrap = !!(softWrapChk && softWrapChk.checked);
+      // 修复：原先引用了不存在的 softWrapChk，导致 setState 从未执行
+      // 这里改为依据按钮的 aria-pressed 状态判断是否开启软换行
+      const softWrap = !!(softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true');
       const device = (deviceSel && deviceSel.value) ? deviceSel.value : '';
       vscode.setState({
         filterText: filterText,

@@ -334,6 +334,30 @@ button {
   flex: 1;
   overflow: auto;
   min-height: 0;
+  /* 始终预留滚动条空间，避免出现/消失引发布局跳动 */
+  scrollbar-gutter: stable both-edges;
+  /* 兼容 Firefox 的滚动条配色（常显 + 半透明） */
+  scrollbar-color: rgba(255,255,255,0.35) rgba(255,255,255,0.08);
+  scrollbar-width: thin;
+}
+
+/* WebKit/Chromium 自定义滚动条：常显、半透明 */
+#log::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+#log::-webkit-scrollbar-thumb {
+  background-color: rgba(255,255,255,0.35);
+  border-radius: 8px;
+  background-clip: padding-box;
+  border: 2px solid transparent; /* 让拇指更圆润 */
+}
+#log::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+}
+#log:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255,255,255,0.5);
 }
 
 /* 每一条日志作为独立的块级元素，避免选择时把上一行一起选中 */

@@ -94,6 +94,18 @@ body {
   padding: 0 10px;
 }
 
+/* 聚类代表行计数样式 */
+#log .cluster-line {
+  display: block;
+  white-space: pre;
+}
+#log .cluster-meta {
+  color: var(--vscode-descriptionForeground);
+  margin-right: 6px;
+}
+#log .cluster-line[role="button"] { cursor: pointer; }
+#log .cluster-sample { display: block; white-space: pre; color: var(--vscode-descriptionForeground); padding-left: 18px; }
+
 .content {
   display: flex;
   flex-direction: column;

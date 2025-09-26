@@ -22,6 +22,7 @@ const filterInput = $('filter');
 const clearFilterBtn = $('clearFilter');
 const matchCaseBtn = $('matchCase');
 const softWrapBtn = $('softWrapBtn');
+const clusterBtn = $('clusterBtn');
 let DEBUG = true;
 let currentPackage = '';
 let importMode = false;
@@ -72,6 +73,12 @@ let findQuery = '';
 let findMatches = [];
 let findIndex = 0;
 let preserveScrollNextRebuild = false;
+let clusterMode = false;
+const CLUSTER_MAX = 2000;
+const CLUSTER_SAMPLES_MAX = 5;
+let clusterWorker = null;
+let clusterWorkerReady = false;
+let forceStickOnce = false; // 聚类模式下允许通过“到底”按钮强制粘底一次
 // --- 视口虚拟化（仅未开启软换行时启用） ---
 let virtLastDisplayText = '';
 let virtRepaintScheduled = false;
@@ -325,6 +332,7 @@ function parseLogLine(line){
 }
 function renderHtmlFromText(text){
   if (!text) return '';
+  if (clusterMode) return renderClustersHtml(text);
   const lines = text.split(/\r?\n/);
   let html = '';
   for (let i = 0; i < lines.length; i++){
@@ -366,6 +374,140 @@ function renderHtmlFromText(text){
   }
   return html;
 }
+
+// --- 简易聚类渲染（无 AI）---
+function normalizeForCluster(line){
+  try {
+    // 去掉时间/PID/TID 等，保留 Tag/Package/Level/Message 结构
+    const obj = parseLogLine(line);
+    const tag = (obj.tag || '').toLowerCase();
+    let pkg = (obj.pkg || '').toLowerCase();
+    if (!pkg && obj.pid) {
+      const name = pidMap.get(Number(obj.pid));
+      if (name) pkg = String(name).toLowerCase();
+    }
+    const lvl = (obj.pri || '').toUpperCase();
+    let msg = String(obj.msg || line);
+    // 动态片段占位：十六进制/数字/路径/UUID/IP
+    msg = msg
+      .replace(/0x[0-9a-fA-F]+/g, ' HEX ')
+      .replace(/\b\d+\b/g, ' NUM ')
+      .replace(/[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}/g, ' UUID ')
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, ' IP ')
+      .replace(/[\/][\w\-.]+(?:[\/][\w\-.]+)+/g, ' PATH ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    return { key: tag + '|' + pkg + '|' + lvl + '|' + msg, tag, pkg, lvl, rep: line };
+  } catch(e){
+    return { key: line.toLowerCase(), tag: '', pkg: '', lvl: '', rep: line };
+  }
+}
+
+function buildClusters(text){
+  const lines = text.split(/\r?\n/);
+  const map = new Map();
+  for (let i = 0; i < lines.length; i++){
+    const ln = lines[i];
+    if (!ln) continue;
+    const n = normalizeForCluster(ln);
+    const hit = map.get(n.key);
+    if (!hit) {
+      map.set(n.key, { rep: n.rep, tag: n.tag, pkg: n.pkg, lvl: n.lvl, count: 1, samples: [ln] });
+    } else {
+      hit.count++;
+      if (hit.samples.length < CLUSTER_SAMPLES_MAX) hit.samples.push(ln);
+    }
+    if (map.size > CLUSTER_MAX) break; // 超出上限提前停止
+  }
+  // 转数组并排序：按等级严重度与计数优先（E/F/W/I/D/V）
+  const order = { 'F': 0, 'E': 1, 'W': 2, 'I': 3, 'D': 4, 'V': 5, '': 6 };
+  const arr = Array.from(map.values());
+  arr.sort((a,b) => {
+    const la = order[a.lvl] !== undefined ? order[a.lvl] : 9;
+    const lb = order[b.lvl] !== undefined ? order[b.lvl] : 9;
+    if (la !== lb) return la - lb;
+    return b.count - a.count;
+  });
+  return arr;
+}
+
+function renderClustersHtml(text){
+  // 优先使用 Worker（若可用）
+  if (clusterWorkerReady && clusterWorker) {
+    // 异步构建：这里直接返回上一次结果或占位；为简化先同步 fallback
+  }
+  const clusters = buildClusters(text);
+  if (!clusters || clusters.length === 0) {
+    // 兜底：当未聚出簇（例如过滤导致为空或规范化规则过严）时，回退到逐行展示，避免空白
+    const lines = text.split(/\r?\n/);
+    let fallback = '';
+    for (let i = 0; i < lines.length; i++){
+      const ln = lines[i];
+      if (!ln) continue;
+      fallback += '<span>' + highlightSegment(ln) + '</span>';
+    }
+    return fallback;
+  }
+  let html = '';
+  for (let i = 0; i < clusters.length; i++){
+    const c = clusters[i];
+    const priBox = c.lvl ? ('<span class="pri pri-' + c.lvl.toLowerCase() + '">' + c.lvl + '</span>') : '';
+    const meta = '<span class="cluster-meta">x' + String(c.count) + '</span>';
+    const safeRep = highlightSegment(c.rep || '');
+    html += '<span class="cluster-line" role="button" data-cidx="' + i + '">' + meta + priBox + ' ' + safeRep + '</span>';
+  }
+  return html;
+}
+
+// 展开/折叠样例：事件委托
+logEl.addEventListener('click', (e) => {
+  if (!clusterMode) return;
+  const target = e.target && (e.target.closest ? e.target.closest('.cluster-line') : null);
+  if (!target) return;
+  const idx = Number(target.getAttribute('data-cidx') || '-1');
+  if (idx < 0) return;
+  try {
+    // 重新构建当前 clusters 以获取 samples（受过滤内容影响）
+    const text = filterText ? filterTextChunk(backlogText) : backlogText;
+    const clusters = buildClusters(text);
+    const c = clusters[idx];
+    if (!c || !c.samples || c.samples.length === 0) return;
+    // 若已展开则折叠
+    const next = target.nextSibling;
+    if (next && next.classList && next.classList.contains('cluster-sample')) {
+      next.remove();
+      return;
+    }
+    // 构建样例块
+    let block = '';
+    for (let i = 0; i < c.samples.length; i++) {
+      block += '<span class="cluster-sample">' + highlightSegment(c.samples[i]) + '</span>';
+    }
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = block;
+    // 插在该簇行后
+    target.parentNode.insertBefore(wrapper, target.nextSibling);
+    // 给 wrapper 的子项打上类标识
+    const kids = wrapper.childNodes;
+    for (let i = 0; i < kids.length; i++) {
+      if (kids[i].classList) kids[i].classList.add('cluster-sample');
+    }
+  } catch(e){}
+});
+
+// 初始化 Worker（相对路径取决于 webview 注入方式，这里与 media 同级）
+try {
+  clusterWorker = new Worker('clusterWorker.js');
+  clusterWorker.onmessage = (e) => {
+    const msg = e.data || {};
+    if (msg.type === 'built' && Array.isArray(msg.clusters)) {
+      // 收到结果后直接重建（此处为后续增强预留；当前仍使用同步 buildClusters）
+    }
+  };
+  clusterWorker.onerror = () => { /* 忽略 */ };
+  clusterWorkerReady = true;
+} catch(e) { clusterWorker = null; clusterWorkerReady = false; }
 function isAtBottom(){
   // 放宽阈值，避免因内容持续增长导致“永远不在底部”的情况
   return (logEl.scrollTop + logEl.clientHeight) >= (logEl.scrollHeight - 40);
@@ -379,6 +521,8 @@ function enableFollowAndStick(){
     scheduleFlush();
   }
   logEl.scrollTop = logEl.scrollHeight;
+  // 在聚类模式下也粘底一次
+  forceStickOnce = true;
   setStatus('已恢复跟随滚动');
   dlog('[follow] manual restore');
 }
@@ -388,7 +532,7 @@ function scheduleFlush(){
   requestAnimationFrame(() => {
     flushScheduled = false;
     if (!queuedAppend) return;
-    const stick = autoFollow && isAtBottom();
+    const stick = !clusterMode && autoFollow && isAtBottom();
     // 更新原始日志备份（用于过滤重建）
     backlogText += queuedAppend;
     if (backlogText.length > MAX_LOG_TEXT_LENGTH) {
@@ -1031,11 +1175,12 @@ function scheduleRebuild(){
   rebuildScheduled = true;
   requestAnimationFrame(() => {
     rebuildScheduled = false;
-    const stick = autoFollow && isAtBottom();
-    const prevScrollTop = preserveScrollNextRebuild ? logEl.scrollTop : null;
+    const stick = (autoFollow && isAtBottom()) || (clusterMode && forceStickOnce);
+    const prevScrollTop = logEl.scrollTop;
+    const prevScrollHeight = logEl.scrollHeight;
     const text = filterText ? filterTextChunk(backlogText) : backlogText;
     // 优先处理虚拟化渲染（支持软换行：使用折行单元估算）
-    if (shouldVirtualize(text)) {
+    if (!clusterMode && shouldVirtualize(text)) {
       virtLastDisplayText = text;
       // 虚拟化渲染自身处理高度与布局，容器样式无需强制移除 wrap
       virtualRebuild(text);
@@ -1054,9 +1199,18 @@ function scheduleRebuild(){
       } else {
         logEl.classList.remove('wrap');
       }
-      if (preserveScrollNextRebuild && prevScrollTop != null) {
+      if (stick) {
+        try { logEl.scrollTop = logEl.scrollHeight; } catch(e){}
+        forceStickOnce = false;
+      } else if (preserveScrollNextRebuild) {
         try { logEl.scrollTop = prevScrollTop; } catch(e){}
         preserveScrollNextRebuild = false;
+      } else if (clusterMode && !stick) {
+        // 聚类模式下频繁重建，默认保持可见区域不跳动
+        try {
+          const delta = logEl.scrollHeight - prevScrollHeight;
+          logEl.scrollTop = Math.max(0, prevScrollTop + Math.max(0, delta));
+        } catch(e){}
       }
     }
     if (stick) logEl.scrollTop = logEl.scrollHeight;
@@ -1172,6 +1326,17 @@ if (softWrapBtn) {
     softWrapBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
     if (next) logEl.classList.add('wrap'); else logEl.classList.remove('wrap');
     scheduleSaveState();
+  });
+}
+
+// 聚类开关
+if (clusterBtn) {
+  clusterBtn.addEventListener('click', () => {
+    clusterMode = !clusterMode;
+    clusterBtn.setAttribute('aria-pressed', clusterMode ? 'true' : 'false');
+    setStatus(clusterMode ? '已开启语义聚类与去重' : '已关闭语义聚类与去重');
+    // 切换模式时全量重建视图
+    scheduleRebuild();
   });
 }
 

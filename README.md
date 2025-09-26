@@ -1,9 +1,18 @@
 [TOC]
 
-### android-logcat（Cursor插件）
+### 插件安装方式
+1. 打开Cursor->顶部导航栏View->Command Palette。
+2. 输入Extensions: Install from VSIX...。
+![](./doc/image2.png)
+3. 在项目工程./vsix_directory目录选择需要安装的vsix文件。
+4. 安装完成后，重启Cursor。
+5. 打开右上角Toggle Panel->然后选择android logcat。
 
+
+### android-logcat（Cursor插件）
 为 Cursor打造的一个轻量且实用的 Android Logcat 面板插件。在底部 Toggle Panel 中提供 “android logcat” 标签页，支持设备选择、实时过滤、大小写匹配、软换行、暂停/恢复、清空日志、按级别着色，以及将日志保存到文件。
-![](./doc/image.png)
+![](./doc/image1.png)
+
 #### 架构概览
 
 ```mermaid
@@ -119,9 +128,9 @@ cursor-android-logcat/
 
 #### 后续可做
 - 更丰富的语法过滤（AND/OR、`tag:xxx`、`pkg:xxx` 等表达式）与高亮。
-- 列对齐与字段高亮（时间、PID/TID、TAG 列的定宽布局）。
-- 导出当前视图、复制全部、正则过滤等增强功能。
 
 
 ### 待办
 1. 软换行-虚拟化窗口（解决上下快速滑动日志输出窗口短暂“黑屏”的问题）---已完成
+2. 导出当前视图、复制全部、正则过滤等增强功能。---已完成
+3. 列对齐与字段高亮（时间、PID/TID、TAG 列的定宽布局）。---已完成

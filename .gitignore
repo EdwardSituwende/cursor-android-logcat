@@ -26,9 +26,6 @@ coverage/
 tmp/
 temp/
 
-# --- Package artifacts ---
-*.vsix
-
 # --- TypeScript ---
 *.tsbuildinfo
 

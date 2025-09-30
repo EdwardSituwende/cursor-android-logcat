@@ -79,6 +79,10 @@ const CLUSTER_SAMPLES_MAX = 5;
 let clusterWorker = null;
 let clusterWorkerReady = false;
 let forceStickOnce = false; // 聚类模式下允许通过“到底”按钮强制粘底一次
+// 查找命中后下一次重建完成需要将当前命中滚动到视口中间
+let centerOnNextHighlight = false;
+let lastTargetLineNum = null; // 记录当前命中所在的行（1-based）
+let lastTargetText = ''; // 记录当前命中的原始文本片段（用于 DOM 内定位）
 // --- 视口虚拟化（仅未开启软换行时启用） ---
 let virtLastDisplayText = '';
 let virtRepaintScheduled = false;
@@ -86,6 +90,9 @@ const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化（未换行
 const VIRT_MIN_UNITS = 3000; // 折行单元数超过阈值才在软换行启用
 const VIRT_BUFFER_PX = 800;  // 视口上下各缓存约 800px 的内容
 let virt = { lineHeight: 18, totalLines: 0, first: 0, last: 0, wrapUnits: null, wrapPrefix: null, contentWidth: 0, font: '' };
+// 选择期间暂停 DOM 重建，防止选区因重排而被意外扩大
+let selectionActive = false;
+let pendingRebuildAfterSelection = false;
 function isSoftWrapOn(){ return !!(softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true'); }
 function measureLineHeight(){
   try {
@@ -260,7 +267,17 @@ function scheduleVirtualRepaint(){
   virtRepaintScheduled = true;
   requestAnimationFrame(() => {
     virtRepaintScheduled = false;
-    if (virtLastDisplayText) virtualRebuild(virtLastDisplayText);
+    if (selectionActive) {
+      // 选择中不进行重绘，防止选区跳动
+      return;
+    }
+    if (virtLastDisplayText) {
+      virtualRebuild(virtLastDisplayText);
+      // 重绘后修正当前高亮
+      if (findVisible && findMatches && findMatches.length) {
+        markCurrentHighlight();
+      }
+    }
   });
 }
 // 颜色渲染：转义与按行着色
@@ -584,6 +601,9 @@ function openFind(){
     if (findQuery && findMatches && findMatches.length) {
       alignFindIndexToViewport();
       updateFindCounter();
+      // 打开查找时，确保首个命中高亮样式正确并居中
+      centerOnNextHighlight = true;
+      scheduleRebuild();
     }
   } catch(e){}
 }
@@ -625,6 +645,7 @@ function recomputeFind(){
   preserveScrollNextRebuild = true;
   // 将当前命中对齐到视口
   alignFindIndexToViewport();
+  centerOnNextHighlight = true;
   scheduleRebuild();
 }
 function scrollToFindIndex(){
@@ -656,6 +677,33 @@ function scrollToFindIndex(){
     }
   } catch(e){}
 }
+
+function centerCurrentHighlight(){
+  try {
+    const el = logEl.querySelector('.hl-current');
+    if (!el) return false;
+    const targetTop = Math.max(0, Math.round(el.offsetTop - ((logEl.clientHeight - (el.offsetHeight || 18)) / 2)));
+    logEl.scrollTop = targetTop;
+    return true;
+  } catch(e){ return false; }
+}
+
+function markCurrentHighlight(){
+  try {
+    // 将所有可见的高亮重置为普通，然后把第 findIndex 个高亮标记为当前
+    const nodes = logEl.querySelectorAll('.hl, .hl-current');
+    const total = nodes ? nodes.length : 0;
+    if (!total) return false;
+    for (let i = 0; i < total; i++) {
+      const n = nodes[i];
+      if (n && n.classList) { n.classList.remove('hl-current'); n.classList.add('hl'); }
+    }
+    const idx = ((findIndex % total) + total) % total;
+    const cur = nodes[idx];
+    if (cur && cur.classList) { cur.classList.remove('hl'); cur.classList.add('hl-current'); return true; }
+    return false;
+  } catch(e){ return false; }
+}
 function alignFindIndexToViewport(){
   if (!findMatches.length) return;
   try {
@@ -685,8 +733,20 @@ if (findClear) findClear.addEventListener('click', () => { findInput.value = '';
 if (findCase) findCase.addEventListener('click', () => { findMatchCase = !findMatchCase; setToggle(findCase, findMatchCase); recomputeFind(); });
 if (findRegex) findRegex.addEventListener('click', () => { findUseRegex = !findUseRegex; setToggle(findRegex, findUseRegex); recomputeFind(); });
 if (findInput) findInput.addEventListener('input', recomputeFind);
-if (findPrev) findPrev.addEventListener('click', () => { if (!findMatches.length) return; findIndex = (findIndex - 1 + findMatches.length) % findMatches.length; updateFindCounter(); scrollToFindIndex(); scheduleRebuild(); });
-if (findNext) findNext.addEventListener('click', () => { if (!findMatches.length) return; findIndex = (findIndex + 1) % findMatches.length; updateFindCounter(); scrollToFindIndex(); scheduleRebuild(); });
+if (findPrev) findPrev.addEventListener('click', () => {
+  if (!findMatches.length) return;
+  findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+  updateFindCounter();
+  centerOnNextHighlight = true;
+  scheduleRebuild();
+});
+if (findNext) findNext.addEventListener('click', () => {
+  if (!findMatches.length) return;
+  findIndex = (findIndex + 1) % findMatches.length;
+  updateFindCounter();
+  centerOnNextHighlight = true;
+  scheduleRebuild();
+});
 document.addEventListener('keydown', (e) => {
   // 仅当 Webview 获得焦点时拦截快捷键，阻止冒泡到编辑器
   const isFind = (e.key === 'f' || e.key === 'F') && (e.metaKey || e.ctrlKey);
@@ -713,7 +773,7 @@ document.addEventListener('keydown', (e) => {
     if (e.shiftKey) { findIndex = (findIndex - 1 + findMatches.length) % findMatches.length; }
     else { findIndex = (findIndex + 1) % findMatches.length; }
     updateFindCounter();
-    scrollToFindIndex();
+    centerOnNextHighlight = true;
     scheduleRebuild();
   }
 }, true);
@@ -762,6 +822,12 @@ function pickHlClass(k){
 }
 function append(t){
   // 未跟随时不修改 DOM，避免卡顿；先缓冲，提示有新日志
+  if (selectionActive) {
+    pendingWhileNotFollowing += t;
+    setStatus('选择中，已暂缓刷新（有新日志待合并）');
+    dlog('[append] buffered due to selection (len+=', t.length, ') totalPending=', pendingWhileNotFollowing.length);
+    return;
+  }
   if (!autoFollow || !isAtBottom()) {
     pendingWhileNotFollowing += t;
     setStatus('已停止跟随滚动（有新日志待合并）');
@@ -1077,6 +1143,49 @@ window.addEventListener('keydown', (e) => {
 });
 
 let uiPaused = false; // 仅用于按钮文字切换
+// ---- 选择行为处理：选择期间暂停自动重建/刷新，避免选区被放大 ----
+function isSelectionInsideLog(){
+  try {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed) return false;
+    const anchor = sel.anchorNode;
+    const focus = sel.focusNode;
+    if (!anchor && !focus) return false;
+    const contains = (n) => {
+      try { return n && (n === logEl || logEl.contains(n)); } catch(e){ return false; }
+    };
+    return contains(anchor) || contains(focus);
+  } catch(e){ return false; }
+}
+document.addEventListener('selectionchange', () => {
+  const inside = isSelectionInsideLog();
+  if (inside && !selectionActive) {
+    selectionActive = true;
+    dlog('[selection] start -> pause rebuild');
+    // 选择开始时也停止自动跟随，防止粘底影响选区
+    if (autoFollow) {
+      autoFollow = false;
+      setStatus('选择中，已暂停跟随与刷新');
+    }
+  } else if (!inside && selectionActive) {
+    selectionActive = false;
+    dlog('[selection] end -> resume');
+    // 选择结束后，如有延迟的重建请求，立即触发一次
+    if (pendingRebuildAfterSelection) {
+      pendingRebuildAfterSelection = false;
+      // 避免跳动：保持当前位置
+      preserveScrollNextRebuild = true;
+      scheduleRebuild();
+    }
+    // 合并选择期间积累的待追加内容
+    if (pendingWhileNotFollowing) {
+      queuedAppend += pendingWhileNotFollowing;
+      pendingWhileNotFollowing = '';
+      scheduleFlush();
+    }
+    setStatus('已结束选择');
+  }
+});
 function setToggleUi(paused){
   const iconPause = document.getElementById('iconPause');
   const iconPlay = document.getElementById('iconPlay');
@@ -1174,10 +1283,13 @@ if (scrollEndBtn) {
 
 // 过滤：输入即刻应用；采用逐帧重建，避免频繁 DOM 重排
 function scheduleRebuild(){
+  // 选择中暂缓重建，避免影响选区
+  if (selectionActive) { pendingRebuildAfterSelection = true; return; }
   if (rebuildScheduled) return;
   rebuildScheduled = true;
   requestAnimationFrame(() => {
     rebuildScheduled = false;
+    if (selectionActive) { pendingRebuildAfterSelection = true; return; }
     const stick = (autoFollow && isAtBottom()) || (clusterMode && forceStickOnce);
     const prevScrollTop = logEl.scrollTop;
     const prevScrollHeight = logEl.scrollHeight;
@@ -1218,6 +1330,18 @@ function scheduleRebuild(){
           const delta = logEl.scrollHeight - prevScrollHeight;
           logEl.scrollTop = Math.max(0, prevScrollTop + Math.max(0, delta));
         } catch(e){}
+      }
+    }
+    // 重建完成后，确保当前命中带有白色外框
+    if (findVisible && findMatches && findMatches.length) {
+      markCurrentHighlight();
+    }
+    // 重建完成后，如需要将当前命中居中，则执行一次对齐
+    if (centerOnNextHighlight) {
+      centerOnNextHighlight = false;
+      if (!centerCurrentHighlight()) {
+        // 若无法定位到高亮，回退到基于行号的居中
+        scrollToFindIndex();
       }
     }
     if (stick) logEl.scrollTop = logEl.scrollHeight;

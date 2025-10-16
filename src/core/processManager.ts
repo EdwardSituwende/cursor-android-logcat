@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
+import { TIMING, CONFIG_KEYS, FILES, LOG_BUFFERS, STATUS_MESSAGES } from '../utils/constants';
 
 export type StartOptions = { serial: string; pkg: string; tag: string; level: string; buffer: string; save?: boolean; since?: string };
 
@@ -13,8 +14,6 @@ export class ProcessManager {
   private pausedBuffer = "";
   private pendingAppend = "";
   private appendFlushTimer: NodeJS.Timeout | null = null;
-  private readonly APPEND_FLUSH_INTERVAL_MS = 33;
-  private readonly APPEND_SIZE_THRESHOLD = 64 * 1024;
   private lastEmittedLine = ""; // 用于相邻去重
   private carryOverFragment = ""; // 上一批未以换行结束的残片
 
@@ -119,18 +118,18 @@ export class ProcessManager {
     });
   }
 
-  pause() {
+  pause(): void {
     this.requestedPaused = true;
     if (this.isRunningInternal && !this.isPausedInternal) {
       this.isPausedInternal = true;
-      this.onStatus('已暂停');
+      this.onStatus(STATUS_MESSAGES.PAUSED);
       this.debugLog('paused');
     } else if (!this.isRunningInternal) {
       this.onStatus('未在运行（已记录暂停指令，启动后生效）');
     }
   }
 
-  resume() {
+  resume(): void {
     if (!this.isPausedInternal) return;
     if (this.pausedBuffer.length > 0) {
       this.onAppend(this.pausedBuffer);
@@ -138,11 +137,11 @@ export class ProcessManager {
     }
     this.isPausedInternal = false;
     this.requestedPaused = false;
-    this.onStatus('已恢复');
+    this.onStatus(STATUS_MESSAGES.RESUMED);
     this.debugLog('resumed');
   }
 
-  stop() {
+  stop(): void {
     if (this.currentProc) {
       try { this.currentProc.kill('SIGINT'); } catch {}
     }
@@ -150,7 +149,7 @@ export class ProcessManager {
     this.isRunningInternal = false;
     this.isPausedInternal = false;
     this.pausedBuffer = '';
-    this.onStatus('已停止');
+    this.onStatus(STATUS_MESSAGES.STOPPED);
   }
 
   clearBuffers() {
@@ -170,14 +169,14 @@ export class ProcessManager {
     }
   }
 
-  private queueAppend(text: string) {
+  private queueAppend(text: string): void {
     this.pendingAppend += text;
-    if (this.pendingAppend.length >= this.APPEND_SIZE_THRESHOLD) {
+    if (this.pendingAppend.length >= TIMING.APPEND_SIZE_THRESHOLD) {
       this.flushAppendNow();
       return;
     }
     if (!this.appendFlushTimer) {
-      this.appendFlushTimer = setTimeout(() => this.flushAppendNow(), this.APPEND_FLUSH_INTERVAL_MS);
+      this.appendFlushTimer = setTimeout(() => this.flushAppendNow(), TIMING.APPEND_FLUSH_INTERVAL_MS);
     }
   }
 
@@ -243,13 +242,13 @@ export class ProcessManager {
     const cfg = vscode.workspace.getConfiguration('cursorAndroidLogcat');
     const configured = cfg.get<string>('scriptPath');
     if (configured && configured.trim()) return configured;
-    return path.join(this.context.extensionUri.fsPath, 'scripts', 'logcat_android', 'cli_logcat.sh');
+    return path.join(this.context.extensionUri.fsPath, ...FILES.SCRIPT_SUBPATH);
   }
 
   private computeBuffersToMark(buffer: string): string[] {
     const b = String(buffer || '').toLowerCase();
-    if (!b || b === 'main') return ['main'];
-    if (b === 'all') return ['main', 'system', 'events', 'radio'];
+    if (!b || b === LOG_BUFFERS.MAIN) return [LOG_BUFFERS.MAIN];
+    if (b === LOG_BUFFERS.ALL) return [LOG_BUFFERS.MAIN, LOG_BUFFERS.SYSTEM, LOG_BUFFERS.EVENTS, LOG_BUFFERS.RADIO];
     return [b];
   }
 

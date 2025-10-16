@@ -1,6 +1,20 @@
 const vscode = acquireVsCodeApi();
 const $ = (id) => document.getElementById(id);
 
+// 常量定义
+const MAX_LOG_TEXT_LENGTH = 2_000_000; // 最多约 2MB 文本
+const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化
+const VIRT_MIN_UNITS = 3000; // 折行单元数超过阈值
+const VIRT_BUFFER_PX = 800;  // 视口上下各缓存约 800px
+const CLUSTER_MAX = 2000;    // 聚类最大数量
+const CLUSTER_SAMPLES_MAX = 5; // 每个聚类最多样例数
+const COL_TAG = 23;   // Tag 固定宽度
+const COL_PKG = 30;   // Package 固定最大宽度
+const COL_PID = 11;   // PID-TID 固定宽度
+const MAX_IMPORT_CHARS = MAX_LOG_TEXT_LENGTH;
+const MAX_IMPORT_LINES = 50000;
+
+// DOM 元素引用
 const deviceSel = $('device');
 const toggleBtn = $('toggle');
 const clearBtn = $('clear');
@@ -23,6 +37,8 @@ const clearFilterBtn = $('clearFilter');
 const matchCaseBtn = $('matchCase');
 const softWrapBtn = $('softWrapBtn');
 const clusterBtn = $('clusterBtn');
+
+// 全局状态
 let DEBUG = true;
 let currentPackage = '';
 let importMode = false;
@@ -47,25 +63,27 @@ function applyPausedStateFromStatus(statusText){
   } catch(e){}
 }
 // 当用户停留在底部时才自动跟随到底，否则保持用户当前位置
+// 滚动与追加状态
 let autoFollow = true;
 let pendingWhileNotFollowing = '';
 let queuedAppend = '';
 let flushScheduled = false;
-const MAX_LOG_TEXT_LENGTH = 2_000_000; // 最多约 2MB 文本，超过则从头部裁剪
-// 移除大文本持久化，避免状态膨胀导致恢复/切换卡顿
-const STATE_MAX_TEXT_LENGTH = 0; // 保留常量但不再使用
 let backlogText = '';
 let filterText = '';
 let matchCase = false;
 let rebuildScheduled = false;
-// 解析后的过滤表达式：OR 的每项是 AND 词数组
+
+// 过滤状态
 let filterAst = null; // Array<Array<string>> | null
 let historyLoaded = false;
 let saveStateScheduled = false;
+
+// PID 映射
 const pidMap = new Map();
-let pidMapDirty = false; // pidMap 增量合并标记，配合轻量节流
+let pidMapDirty = false;
 let pidMapRebuildTimer = null;
-// find state
+
+// 查找状态
 let findVisible = false;
 let findMatchCase = false;
 let findUseRegex = false;
@@ -73,24 +91,22 @@ let findQuery = '';
 let findMatches = [];
 let findIndex = 0;
 let preserveScrollNextRebuild = false;
+let centerOnNextHighlight = false;
+let lastTargetLineNum = null; // 1-based
+let lastTargetText = '';
+
+// 聚类模式
 let clusterMode = false;
-const CLUSTER_MAX = 2000;
-const CLUSTER_SAMPLES_MAX = 5;
 let clusterWorker = null;
 let clusterWorkerReady = false;
-let forceStickOnce = false; // 聚类模式下允许通过“到底”按钮强制粘底一次
-// 查找命中后下一次重建完成需要将当前命中滚动到视口中间
-let centerOnNextHighlight = false;
-let lastTargetLineNum = null; // 记录当前命中所在的行（1-based）
-let lastTargetText = ''; // 记录当前命中的原始文本片段（用于 DOM 内定位）
-// --- 视口虚拟化（仅未开启软换行时启用） ---
+let forceStickOnce = false;
+
+// 视口虚拟化
 let virtLastDisplayText = '';
 let virtRepaintScheduled = false;
-const VIRT_MIN_LINES = 2000; // 行数超过阈值才开启虚拟化（未换行）
-const VIRT_MIN_UNITS = 3000; // 折行单元数超过阈值才在软换行启用
-const VIRT_BUFFER_PX = 800;  // 视口上下各缓存约 800px 的内容
 let virt = { lineHeight: 18, totalLines: 0, first: 0, last: 0, wrapUnits: null, wrapPrefix: null, contentWidth: 0, font: '' };
-// 选择期间暂停 DOM 重建，防止选区因重排而被意外扩大
+
+// 选择状态
 let selectionActive = false;
 let pendingRebuildAfterSelection = false;
 function isSoftWrapOn(){ return !!(softWrapBtn && softWrapBtn.getAttribute('aria-pressed') === 'true'); }
@@ -280,7 +296,11 @@ function scheduleVirtualRepaint(){
     }
   });
 }
-// 颜色渲染：转义与按行着色
+/**
+ * HTML 实体转义
+ * @param {string} s 原始字符串
+ * @returns {string} 转义后的字符串
+ */
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
 }
@@ -297,12 +317,34 @@ function detectLevel(line){
   if (m && m[1]) return m[1].toLowerCase();
   return '';
 }
-// 格式化输出：日期时间、PID-TID、Tag、Package、Priority、Message
-const COL_TAG = 23; // Tag 固定宽度
-const COL_PKG = 30; // Package 固定最大宽度（不足补空格，对齐）
-const COL_PID = 11; // PID-TID 固定宽度，例如 21347-21569
-function padEndFixed(s, n){ s = String(s || ''); return s.length >= n ? s.slice(0, n) : (s + ' '.repeat(n - s.length)); }
-function padEndNoCut(s, n){ s = String(s || ''); return s.length >= n ? s : (s + ' '.repeat(n - s.length)); }
+/**
+ * 字符串填充（固定宽度，超出则截断）
+ * @param {string} s 字符串
+ * @param {number} n 宽度
+ * @returns {string}
+ */
+function padEndFixed(s, n){ 
+  s = String(s || ''); 
+  return s.length >= n ? s.slice(0, n) : (s + ' '.repeat(n - s.length)); 
+}
+
+/**
+ * 字符串填充（不截断）
+ * @param {string} s 字符串
+ * @param {number} n 宽度
+ * @returns {string}
+ */
+function padEndNoCut(s, n){ 
+  s = String(s || ''); 
+  return s.length >= n ? s : (s + ' '.repeat(n - s.length)); 
+}
+
+/**
+ * 中间省略号格式化
+ * @param {string} s 字符串
+ * @param {number} width 宽度
+ * @returns {string}
+ */
 function middleEllipsisFixed(s, width){
   s = String(s || '');
   if (s.length <= width) return padEndNoCut(s, width);
@@ -1005,8 +1047,6 @@ onMessage('config', (msg) => {
 
 onMessage('importDump', (msg) => {
   let text = String(msg.text || '');
-  const MAX_IMPORT_CHARS = MAX_LOG_TEXT_LENGTH;
-  const MAX_IMPORT_LINES = 50000;
   if (text.length > MAX_IMPORT_CHARS) {
     text = text.slice(text.length - MAX_IMPORT_CHARS);
     const firstNl = text.indexOf('\n');

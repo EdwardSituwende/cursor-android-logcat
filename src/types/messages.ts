@@ -19,8 +19,9 @@ export type StartMessage = {
 export type PauseMessage = { type: 'pause' };
 export type StopMessage = { type: 'stop' };
 export type RestartMessage = { type: 'restart'; serial?: string };
-export type ExportLogsMessage = { type: 'exportLogs' };
+export type ExportLogsMessage = { type: 'exportLogs'; text?: string; suggested?: string };
 export type ImportLogsMessage = { type: 'importLogs' };
+export type PidMissMessage = { type: 'pidMiss'; pid?: number };
 
 export type IncomingWebviewMessage =
   | ReadyMessage
@@ -33,7 +34,8 @@ export type IncomingWebviewMessage =
   | StopMessage
   | RestartMessage
   | ExportLogsMessage
-  | ImportLogsMessage;
+  | ImportLogsMessage
+  | PidMissMessage;
 
 // 发送到 Webview 的出站消息
 export type AppendMessage = { type: 'append'; text: string };
@@ -45,6 +47,7 @@ export type VisibleMessage = { type: 'visible' };
 export type HistoryDumpMessage = { type: 'historyDump'; text: string };
 export type ImportDumpMessage = { type: 'importDump'; text: string };
 export type ImportModeMessage = { type: 'importMode'; name: string };
+export type PidMapMessage = { type: 'pidMap'; map: Record<number, string> };
 
 export type OutgoingWebviewMessage =
   | AppendMessage
@@ -55,6 +58,7 @@ export type OutgoingWebviewMessage =
   | VisibleMessage
   | HistoryDumpMessage
   | ImportDumpMessage
-  | ImportModeMessage;
+  | ImportModeMessage
+  | PidMapMessage;
 
 

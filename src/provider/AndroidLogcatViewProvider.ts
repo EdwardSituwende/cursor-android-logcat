@@ -47,7 +47,11 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private debugLog(...parts: any[]) {
+  /**
+   * 输出调试日志
+   * @param parts 日志内容（支持多个参数）
+   */
+  private debugLog(...parts: unknown[]): void {
     if (!this.debugEnabled) return;
     try {
       const text = parts.map((p) => {
@@ -55,8 +59,9 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         try { return JSON.stringify(p); } catch { return String(p); }
       }).join(' ');
       this.output.appendLine(`[debug] ${text}`);
-    } catch {
-      // ignore logging errors
+    } catch (error) {
+      // 忽略日志输出错误，避免阻塞主流程
+      console.error('Debug log error:', error);
     }
   }
 
@@ -135,13 +140,13 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
       this.deviceTracker = undefined;
     });
 
-    webviewView.webview.onDidReceiveMessage(async (msg: any) => {
+    webviewView.webview.onDidReceiveMessage(async (msg: IncomingWebviewMessage) => {
       if (msg?.type) this.debugLog('onDidReceiveMessage', msg.type);
       switch (msg.type) {
         case 'ready': {
           this.post({ type: 'debug', enabled: this.debugEnabled });
           // 报告解析到的 adb 路径，便于诊断 PATH 差异
-          try { this.post({ type: 'status', text: 'ADB: ' + getResolvedAdbPath() }); } catch {}
+          try { this.postStatus('ADB: ' + getResolvedAdbPath()); } catch {}
           this.refreshDevicesAsync();
           // ADB 冷启动或权限弹窗场景：在首段时间窗内做指数退避重试，直到拿到设备
           this.ensureDevicesSoon();
@@ -161,23 +166,24 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         case 'requestHistory': {
           const serial = String(msg.serial || '').trim();
           if (!serial) {
-            this.post({ type: 'status', text: '请先选择设备' });
+            this.postStatus('请先选择设备');
             break;
           }
-          this.post({ type: 'status', text: '正在加载历史日志...' });
+          this.postStatus('正在加载历史日志...');
           this.dumpHistory(serial, 10000)
             .then((text) => {
               this.post({ type: 'historyDump', text });
-              this.post({ type: 'status', text: '历史日志已加载' });
+              this.postStatus('历史日志已加载');
             })
-            .catch(() => {
-              this.post({ type: 'status', text: '加载历史日志失败' });
+            .catch((error) => {
+              this.debugLog('Failed to load history', error);
+              this.postStatus('加载历史日志失败');
             });
           break;
         }
         case 'clear': {
           this.streamSvc.clearBuffers();
-          this.post({ type: 'status', text: '已清空（仅UI与缓冲）' });
+          this.postStatus('已清空（仅UI与缓冲）');
           this.debugLog('cleared buffers');
           break;
         }
@@ -189,14 +195,14 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         case 'selectDevice': {
           const serial = String(msg.serial || '').trim();
           if (!serial) {
-            this.post({ type: 'status', text: '请先选择设备' });
+            this.postStatus('请先选择设备');
             break;
           }
           this.currentSelectedSerial = serial;
           const dev = this.lastDevices.find(d => d.serial === serial);
           const status = (dev?.status || '').toLowerCase();
           if (status === 'unauthorized') {
-            this.post({ type: 'status', text: '设备未授权，请在手机上允许 USB 调试' });
+            this.postStatus('设备未授权，请在手机上允许 USB 调试');
             break;
           }
           if (!status || status === 'device') {
@@ -206,7 +212,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
           }
           // offline 等状态：有限退避等待上线
           const token = ++this.pendingWaitToken;
-          this.post({ type: 'status', text: '设备离线，等待设备上线…' });
+          this.postStatus('设备离线，等待设备上线…');
           const attempts = [15000, 30000, 60000];
           (async () => {
             for (let i = 0; i < attempts.length; i++) {
@@ -231,34 +237,40 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'start': {
           if (!this.streamSvc.isRunning()) {
-            const m = msg as any;
-            if (!m.serial) {
-              this.post({ type: 'status', text: '请先选择设备' });
+            if (!msg.serial) {
+              this.postStatus('请先选择设备');
               return;
             }
             // 记录当前选中串口，便于退出时标记离线
-            this.currentSelectedSerial = String(m.serial);
-            this.debugLog('startProcess by user', { serial: m.serial, pkg: m.pkg, tag: m.tag, level: m.level, buffer: m.buffer, save: !!m.save });
+            this.currentSelectedSerial = String(msg.serial);
+            this.debugLog('startProcess by user', { 
+              serial: msg.serial, 
+              pkg: msg.pkg, 
+              tag: msg.tag, 
+              level: msg.level, 
+              buffer: msg.buffer, 
+              save: !!msg.save 
+            });
             this.streamSvc.start({
-              serial: m.serial,
-              pkg: m.pkg || '',
-              tag: m.tag || '*',
-              level: m.level || 'D',
-              buffer: m.buffer || 'main',
-              save: !!m.save,
+              serial: msg.serial,
+              pkg: msg.pkg || '',
+              tag: msg.tag || '*',
+              level: msg.level || 'D',
+              buffer: msg.buffer || 'main',
+              save: !!msg.save,
             });
             this.setLastConfig({
-              serial: m.serial,
-              pkg: m.pkg || '',
-              tag: m.tag || '*',
-              level: m.level || 'D',
-              buffer: m.buffer || 'main',
-              save: !!m.save,
+              serial: msg.serial,
+              pkg: msg.pkg || '',
+              tag: msg.tag || '*',
+              level: msg.level || 'D',
+              buffer: msg.buffer || 'main',
+              save: !!msg.save,
             });
           } else if (this.streamSvc.isPaused()) {
             this.streamSvc.resume();
           } else {
-            this.post({ type: 'status', text: '已在运行中' });
+            this.postStatus('已在运行中');
           }
           break;
         }
@@ -272,23 +284,25 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
         }
           case 'restart': {
             try {
-              const serial = String((msg as any).serial || this.currentSelectedSerial || '').trim();
+              const serial = String(msg.serial || this.currentSelectedSerial || '').trim();
               if (!serial) {
-                this.post({ type: 'status', text: '请先选择设备' });
+                this.postStatus('请先选择设备');
                 break;
               }
-              this.post({ type: 'status', text: '正在重启 logcat…' });
+              this.postStatus('正在重启 logcat…');
               // 停止并用最近配置重新启动；历史由前端请求
               this.startStreamForSerial(serial);
-              this.post({ type: 'status', text: '已重启' });
-            } catch {}
+              this.postStatus('已重启');
+            } catch (error) {
+              this.debugLog('restart error', error);
+            }
             break;
           }
         case 'exportLogs': {
           const plainText: string = String(msg.text || '');
           const suggested: string = String(msg.suggested || 'AndroidLog.txt');
           try {
-            this.post({ type: 'status', text: '正在准备导出...' });
+            this.postStatus('正在准备导出...');
             const defaultPath = path.join(os.homedir(), 'Desktop', suggested);
             const uri = await vscode.window.showSaveDialog({
               title: 'Export Logs to a File',
@@ -297,14 +311,15 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               saveLabel: 'Save',
             });
             if (!uri) {
-              this.post({ type: 'status', text: '已取消导出' });
+              this.postStatus('已取消导出');
               break;
             }
             await vscode.workspace.fs.writeFile(uri, Buffer.from(plainText, 'utf8'));
-            this.post({ type: 'status', text: '已导出日志: ' + uri.fsPath });
-          } catch (e) {
-            this.post({ type: 'status', text: '导出失败' });
-            this.debugLog('export error', String(e));
+            this.postStatus('已导出日志: ' + uri.fsPath);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.debugLog('Export failed:', errorMessage);
+            this.postStatus(`导出失败: ${errorMessage}`);
           }
           break;
         }
@@ -317,7 +332,7 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
               openLabel: 'Open'
             });
             if (!uri || uri.length === 0) {
-              this.post({ type: 'status', text: '已取消导入' });
+              this.postStatus('已取消导入');
               break;
             }
             const file = uri[0];
@@ -331,15 +346,23 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
             // 下发导入内容（放在 importMode 之后，前端将清理缓冲避免残留）
             this.post({ type: 'importDump', text });
             this.importActive = true;
-            this.post({ type: 'status', text: '已导入日志: ' + file.fsPath });
-          } catch (e) {
-            this.post({ type: 'status', text: '导入失败' });
-            this.debugLog('import error', String(e));
+            this.postStatus('已导入日志: ' + file.fsPath);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.debugLog('Import failed:', errorMessage);
+            this.postStatus(`导入失败: ${errorMessage}`);
           }
           break;
         }
         case 'pidMiss': {
-          try { const pid = Number((msg as any).pid || 0); if (pid && this.pidMapSvc) { this.pidMapSvc.demand([pid]); } } catch {}
+          try { 
+            const pid = Number(msg.pid || 0); 
+            if (pid && this.pidMapSvc) { 
+              this.pidMapSvc.demand([pid]); 
+            } 
+          } catch (error) {
+            this.debugLog('pidMiss error', error);
+          }
           break;
         }
       }
@@ -424,11 +447,23 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     this.hasAutoStarted = true;
   }
 
-  private post(message: any) {
+  /**
+   * 向 Webview 发送消息
+   * @param message 消息对象
+   */
+  private post(message: Record<string, unknown>): void {
     if (this.debugEnabled && message && message.type && message.type !== 'append') {
       this.debugLog('post -> webview', message.type);
     }
     this.view?.webview.postMessage(message);
+  }
+
+  /**
+   * 向 Webview 发送状态消息
+   * @param text 状态文本
+   */
+  private postStatus(text: string): void {
+    this.post({ type: 'status', text });
   }
 
   // 进程与缓冲逻辑下沉到 ProcessManager
@@ -437,7 +472,21 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     return this.streamSvc.dumpHistory(serial, maxLines);
   }
 
-  private stopProcess() { this.streamSvc.stop(); }
+  /**
+   * 停止当前的日志捕获进程（公共方法，供命令调用）
+   */
+  public stopProcess(): void { 
+    this.streamSvc.stop(); 
+  }
+
+  /**
+   * 刷新设备列表（公共方法，供命令调用）
+   */
+  public async refreshDevices(): Promise<void> {
+    this.postStatus('刷新设备...');
+    const devices = await this.listDevices();
+    this.post({ type: 'devices', devices });
+  }
 
   private listDevices(): Promise<DeviceInfo[]> {
     return adbListDevices();
@@ -456,18 +505,33 @@ export class AndroidLogcatViewProvider implements vscode.WebviewViewProvider {
     this.setLastConfig(startCfg);
   }
 
-  private markSelectedDeviceOfflineOnExit() {
+  /**
+   * 标记当前选中的设备为离线状态（在进程退出时调用）
+   */
+  private markSelectedDeviceOfflineOnExit(): void {
     try {
       if (!this.currentSelectedSerial) return;
-      const info = this.knownDevices.get(this.currentSelectedSerial) || { serial: this.currentSelectedSerial } as any;
-      this.knownDevices.set(this.currentSelectedSerial, { serial: this.currentSelectedSerial, model: info.model, status: 'offline' });
+      const info = this.knownDevices.get(this.currentSelectedSerial) || { serial: this.currentSelectedSerial, model: undefined, status: undefined };
+      this.knownDevices.set(this.currentSelectedSerial, { 
+        serial: this.currentSelectedSerial, 
+        model: info.model, 
+        status: 'offline' 
+      });
       // 组装一次列表并推送（不依赖 adb 事件），确保默认串口指向当前
       const list: DeviceInfo[] = [];
-      for (const [serial, d] of this.knownDevices.entries()) list.push({ serial, model: d.model, status: d.status });
+      for (const [serial, d] of this.knownDevices.entries()) {
+        list.push({ serial, model: d.model, status: d.status });
+      }
       const last = this.getLastConfig();
-      this.post({ type: 'devices', devices: list, defaultSerial: this.currentSelectedSerial || last?.serial || '' });
+      this.post({ 
+        type: 'devices', 
+        devices: list, 
+        defaultSerial: this.currentSelectedSerial || last?.serial || '' 
+      });
       this.debugLog('markSelectedDeviceOfflineOnExit posted');
-    } catch {}
+    } catch (error) {
+      this.debugLog('markSelectedDeviceOfflineOnExit error:', error);
+    }
   }
 
   private extractFileName(full: string): string {
